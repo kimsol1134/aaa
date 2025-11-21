@@ -1,0 +1,34 @@
+# 데이터 처리
+pandas>=1.3.0
+numpy>=1.21.0
+
+# 시각화
+matplotlib>=3.4.0
+seaborn>=0.11.0
+plotly>=5.0.0
+
+# 머신러닝
+scikit-learn>=1.0.0
+lightgbm>=3.3.0
+xgboost>=1.5.0
+catboost>=1.0.0
+
+# 불균형 데이터 처리
+imbalanced-learn>=0.9.0
+
+# 모델 해석
+shap>=0.41.0
+
+# 통계
+scipy>=1.7.0
+statsmodels>=0.13.0
+
+# 유틸리티
+joblib>=1.1.0
+openpyxl>=3.0.0
+
+# 웹 애플리케이션
+streamlit>=1.20.0
+
+# 네트워크 분석
+networkx>=2.6.0
