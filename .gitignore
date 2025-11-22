@@ -28,7 +28,6 @@ wheels/
 *.ipynb_checkpoints/
 
 # Data files (large CSV and model files)
-data/기업신용평가정보_*.csv
 data/features/*.csv
 data/processed/*.pkl
 data/processed/*.csv
