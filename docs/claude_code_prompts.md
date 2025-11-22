@@ -310,7 +310,7 @@ Part 2에서 우리는:
   3. **Type II Error** (부도 미탐지율)
   ```
 
-### SMOTE + Tomek Links
+###   
 - 기존 코드 재사용
 - **대안 비교표 추가**:
   ```python
