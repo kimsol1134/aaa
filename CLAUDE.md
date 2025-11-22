@@ -84,6 +84,7 @@ junwoo/
 │   └── app.py                             # Streamlit 웹 대시보드
 ├── scripts/                                # 유틸리티 스크립트
 │   ├── create_industry_analysis.py         # 업종별 분석
+│   ├── create_notebook_summary.py          # 노트북 요약 문서 생성
 │   ├── fix_financial_calculations.py       # 재무 계산 수정
 │   ├── fix_heatmap.py                     # 히트맵 수정
 │   └── parse_ksic.py                      # KSIC 코드 파싱
@@ -93,7 +94,11 @@ junwoo/
 │   ├── evaluation/                        # 평가 메트릭
 │   └── utils/                             # 유틸리티 함수
 └── docs/                                   # 프로젝트 문서
-    └── bankruptcy_prediction_plan.md       # 프로젝트 계획서
+    ├── bankruptcy_prediction_plan.md       # 프로젝트 계획서
+    └── notebook_summaries/                 # 노트북 요약 문서 (Claude Code용)
+        ├── 01_도메인_기반_부도원인_분석_summary.md
+        ├── 01_심화_재무_분석_summary.md
+        └── 02_고급_도메인_특성공학_summary.md
 ```
 
 ## 핵심 아키텍처 및 개념
@@ -242,6 +247,28 @@ python scripts/fix_financial_calculations.py
 
 # KSIC 코드 파싱
 python scripts/parse_ksic.py
+
+# 노트북 요약 문서 생성 (Claude Code용)
+python scripts/create_notebook_summary.py
+```
+
+### 노트북 요약 문서 활용 (Claude Code)
+
+**문제:** 큰 노트북 파일 (7.9MB)은 Claude Code가 한 번에 읽기 어려움
+
+**해결:** 요약 문서를 context로 제공
+- 원본: `notebooks/01_도메인_기반_부도원인_분석.ipynb` (7.9 MB)
+- 요약: `docs/notebook_summaries/01_도메인_기반_부도원인_분석_summary.md` (138 KB)
+- **98% 크기 감소, 중요한 로직과 출력 결과 모두 포함**
+
+**요약 문서에 포함되는 내용:**
+- 모든 마크다운 섹션 (구조, 설명)
+- 모든 코드 셀 (전체 로직)
+- 실행 결과 (print 출력, 데이터프레임, 그래프 정보)
+
+**재생성 방법:**
+```bash
+python scripts/create_notebook_summary.py
 ```
 
 ## 평가 메트릭 우선순위
