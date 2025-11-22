@@ -1,357 +1,487 @@
 """
-🚨 한국 기업 부도 위험 예측 시스템
+한국 기업 부도 예측 시스템 - Streamlit 앱
 
-도메인 지식 기반 AI 모델로 기업의 부도 위험을 실시간 평가합니다.
+DART API 연동 및 실시간 부도 위험 분석
 """
 
 import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import plotly.express as px
-import joblib
-import os
+import sys
+from pathlib import Path
+
+# 프로젝트 루트를 경로에 추가
+ROOT_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+
+from config import *
+from src.dart_api import DartAPIClient, FinancialStatementParser
+from src.domain_features import DomainFeatureGenerator
+from src.models import BankruptcyPredictor
+from src.visualization.charts import create_risk_gauge, create_shap_waterfall, create_radar_chart
+from src.utils.helpers import (
+    get_risk_level, format_korean_number,
+    identify_critical_risks, identify_warnings, generate_recommendations
+)
 
 # 페이지 설정
-st.set_page_config(
-    page_title="부도위험 예측 시스템",
-    page_icon="🚨",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(**PAGE_CONFIG)
 
 # 한글 폰트 설정
 import matplotlib.pyplot as plt
-import platform
-if platform.system() == 'Darwin':
-    plt.rc('font', family='AppleGothic')
-elif platform.system() == 'Windows':
-    plt.rc('font', family='Malgun Gothic')
+plt.rc('font', family=KOREAN_FONT)
 plt.rc('axes', unicode_minus=False)
 
 
+# ========== 캐시된 리소스 ==========
+
 @st.cache_resource
-def load_models():
-    """모델 및 스케일러 로딩"""
+def load_predictor():
+    """모델 로딩 (캐시)"""
+    predictor = BankruptcyPredictor(
+        model_path=MODEL_PATH,
+        scaler_path=SCALER_PATH
+    )
+    predictor.load_model()
+    return predictor
+
+
+@st.cache_data(ttl=3600)
+def fetch_dart_data(company_name: str, year: str):
+    """DART API 데이터 조회 (1시간 캐시)"""
+    if not DART_API_KEY:
+        st.error("❌ DART API 키가 설정되지 않았습니다. .env 파일을 확인하세요.")
+        return None, None
+
     try:
-        model_dir = '../data/processed/'
+        client = DartAPIClient(DART_API_KEY)
 
-        # 베스트 모델 로딩
-        model_files = [f for f in os.listdir(model_dir) if f.startswith('best_model_')]
-        if model_files:
-            model_path = os.path.join(model_dir, model_files[0])
-            model = joblib.load(model_path)
-        else:
-            st.error("모델 파일을 찾을 수 없습니다.")
-            return None, None, None
+        # 기업 검색
+        with st.spinner(f"'{company_name}' 검색 중..."):
+            company = client.search_company(company_name)
 
-        # 스케일러 로딩
-        scaler_path = os.path.join(model_dir, 'scaler.pkl')
-        scaler = joblib.load(scaler_path)
+        st.success(f"✓ {company['corp_name']} ({company['stock_code']}) 검색 완료")
 
-        # 특성 메타데이터
-        features_path = os.path.join(model_dir, 'selected_features.csv')
-        df_sample = pd.read_csv(features_path, nrows=1)
-        feature_names = [col for col in df_sample.columns if col != '모형개발용Performance(향후1년내부도여부)']
+        # 재무제표 조회
+        with st.spinner(f"{year}년 재무제표 조회 중..."):
+            statements = client.get_financial_statements(
+                corp_code=company['corp_code'],
+                bsns_year=year
+            )
 
-        return model, scaler, feature_names
+        st.success(f"✓ {year}년 재무제표 조회 완료")
+
+        return company, statements
+
     except Exception as e:
-        st.error(f"모델 로딩 오류: {str(e)}")
-        return None, None, None
+        st.error(f"❌ 오류 발생: {str(e)}")
+        return None, None
 
 
-def create_risk_gauge(risk_score):
-    """리스크 스코어 게이지 차트"""
-    risk_percent = risk_score * 100
+# ========== 메인 앱 ==========
 
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number+delta",
-        value=risk_percent,
-        domain={'x': [0, 1], 'y': [0, 1]},
-        title={'text': "부도 위험도", 'font': {'size': 24}},
-        delta={'reference': 50, 'increasing': {'color': "red"}},
-        gauge={
-            'axis': {'range': [None, 100], 'tickwidth': 1, 'tickcolor': "darkblue"},
-            'bar': {'color': "darkred" if risk_percent > 70 else "orange" if risk_percent > 40 else "lightblue"},
-            'bgcolor': "white",
-            'borderwidth': 2,
-            'bordercolor': "gray",
-            'steps': [
-                {'range': [0, 30], 'color': '#90EE90'},
-                {'range': [30, 60], 'color': '#FFD700'},
-                {'range': [60, 100], 'color': '#FF6B6B'}
-            ],
-            'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': risk_percent
-            }
-        }
-    ))
-
-    fig.update_layout(
-        height=300,
-        margin=dict(l=20, r=20, t=50, b=20)
-    )
-
-    return fig
-
-
-def get_risk_level(risk_score):
-    """위험 등급 반환"""
-    if risk_score < 0.3:
-        return "안전", "🟢", "부도 위험이 낮습니다"
-    elif risk_score < 0.6:
-        return "주의", "🟡", "일부 재무 지표 개선 필요"
-    elif risk_score < 0.8:
-        return "경고", "🟠", "부도 위험이 높습니다"
-    else:
-        return "위험", "🔴", "즉시 조치가 필요합니다"
-
-
-def create_feature_importance_plot(importances, feature_names, top_n=10):
-    """특성 중요도 차트"""
-    importance_df = pd.DataFrame({
-        'feature': feature_names,
-        'importance': importances
-    }).sort_values('importance', ascending=False).head(top_n)
-
-    fig = go.Figure(go.Bar(
-        y=importance_df['feature'].values[::-1],
-        x=importance_df['importance'].values[::-1],
-        orientation='h',
-        marker_color='lightcoral'
-    ))
-
-    fig.update_layout(
-        title=f'주요 위험 요인 (상위 {top_n}개)',
-        xaxis_title='중요도',
-        yaxis_title='특성',
-        height=400,
-        margin=dict(l=20, r=20, t=40, b=20)
-    )
-
-    return fig
-
-
-# 메인 앱
 def main():
-    st.title("🚨 한국 기업 부도 위험 예측 시스템")
+    """메인 앱"""
+
+    # 헤더
+    st.title(f"{APP_ICON} {APP_TITLE}")
     st.markdown("---")
 
-    # 모델 로딩
-    model, scaler, feature_names = load_models()
+    # 사이드바 - 입력 방식 선택
+    st.sidebar.header("📋 입력 방식 선택")
 
-    if model is None:
-        st.error("⚠️ 모델을 로딩할 수 없습니다. 노트북을 먼저 실행해주세요.")
-        st.stop()
-
-    # 사이드바 - 데이터 입력 방식 선택
-    st.sidebar.title("📊 데이터 입력")
     input_method = st.sidebar.radio(
-        "입력 방식 선택",
-        ["수동 입력", "CSV 업로드", "샘플 데이터"]
+        "데이터 입력 방법",
+        [
+            "🔍 DART API 검색 (상장기업)",
+            "📝 재무제표 직접 입력",
+            "📂 샘플 데이터 사용"
+        ]
     )
 
-    # 입력 데이터
-    input_data = None
+    # 변수 초기화
+    company_info = None
+    financial_data = None
+    company_name = None
+    year = None
 
-    if input_method == "수동 입력":
-        st.sidebar.markdown("### 주요 재무 지표 입력")
+    # ===== 입력 모드 1: DART API 검색 =====
+    if input_method == "🔍 DART API 검색 (상장기업)":
+        st.header("🔍 DART API 기업 검색")
 
-        with st.sidebar.expander("📈 재무상태표", expanded=True):
-            유동자산 = st.number_input("유동자산 (백만원)", value=1000, step=100)
-            유동부채 = st.number_input("유동부채 (백만원)", value=500, step=100)
-            자산총계 = st.number_input("자산총계 (백만원)", value=2000, step=100)
-            부채총계 = st.number_input("부채총계 (백만원)", value=1000, step=100)
+        col1, col2 = st.columns([3, 1])
 
-        with st.sidebar.expander("💰 손익계산서"):
-            매출액 = st.number_input("매출액 (백만원)", value=3000, step=100)
-            영업이익 = st.number_input("영업이익 (백만원)", value=200, step=10)
-            당기순이익 = st.number_input("당기순이익 (백만원)", value=150, step=10)
+        with col1:
+            company_name = st.text_input(
+                "기업명 또는 종목코드",
+                value="삼성전자",
+                help="예: 삼성전자, SK하이닉스, 005930"
+            )
 
-        with st.sidebar.expander("💵 현금흐름표"):
-            영업현금흐름 = st.number_input("영업활동현금흐름 (백만원)", value=180, step=10)
+        with col2:
+            year = st.selectbox(
+                "회계연도",
+                options=["2023", "2022", "2021", "2020"],
+                index=0
+            )
 
-        # 간단한 특성 계산 (실제로는 모든 특성 필요)
-        자본총계 = 자산총계 - 부채총계
+        if st.button("🚀 조회 및 분석 시작", type="primary"):
+            # DART API 조회
+            company, statements = fetch_dart_data(company_name, year)
 
-        # 주요 비율 계산
-        유동비율 = 유동자산 / (유동부채 + 1) if 유동부채 > 0 else 0
-        부채비율 = 부채총계 / (자본총계 + 1) if 자본총계 > 0 else 0
-        ROA = 당기순이익 / (자산총계 + 1) if 자산총계 > 0 else 0
+            if company and statements:
+                # 파싱
+                parser = FinancialStatementParser()
+                financial_data = parser.parse(statements)
 
-        # 더미 데이터 생성 (실제로는 모든 특성 필요)
-        input_data = pd.DataFrame(np.zeros((1, len(feature_names))), columns=feature_names)
+                company_info = {
+                    'corp_name': company['corp_name'],
+                    'stock_code': company['stock_code'],
+                    'year': year
+                }
 
-        # 계산된 값 일부 채우기
-        if '유동비율' in feature_names:
-            input_data.loc[0, '유동비율'] = 유동비율
-        if '부채비율' in feature_names:
-            input_data.loc[0, '부채비율'] = 부채비율
-        if 'ROA' in feature_names:
-            input_data.loc[0, 'ROA'] = ROA
+                # 분석 실행
+                run_analysis(financial_data, company_info)
 
-    elif input_method == "CSV 업로드":
-        uploaded_file = st.sidebar.file_uploader("CSV 파일 업로드", type=['csv'])
-        if uploaded_file:
-            input_data = pd.read_csv(uploaded_file)
-            st.sidebar.success(f"✅ {len(input_data)}개 기업 데이터 로딩 완료")
+    # ===== 입력 모드 2: 직접 입력 =====
+    elif input_method == "📝 재무제표 직접 입력":
+        st.header("📝 재무제표 직접 입력")
 
-    else:  # 샘플 데이터
-        try:
-            sample_path = '../data/processed/selected_features.csv'
-            sample_data = pd.read_csv(sample_path, nrows=5)
-            target_col = '모형개발용Performance(향후1년내부도여부)'
-            if target_col in sample_data.columns:
-                input_data = sample_data.drop(columns=[target_col])
+        st.info("주요 재무 항목을 입력하세요 (단위: 백만원)")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("재무상태표")
+            자산총계 = st.number_input("자산총계 (백만원)", value=1_000_000, step=10_000)
+            부채총계 = st.number_input("부채총계 (백만원)", value=600_000, step=10_000)
+            자본총계 = st.number_input("자본총계 (백만원)", value=400_000, step=10_000)
+            유동자산 = st.number_input("유동자산 (백만원)", value=500_000, step=10_000)
+            유동부채 = st.number_input("유동부채 (백만원)", value=300_000, step=10_000)
+            현금 = st.number_input("현금및현금성자산 (백만원)", value=100_000, step=10_000)
+
+        with col2:
+            st.subheader("손익계산서")
+            매출액 = st.number_input("매출액 (백만원)", value=2_000_000, step=10_000)
+            매출원가 = st.number_input("매출원가 (백만원)", value=1_200_000, step=10_000)
+            영업이익 = st.number_input("영업이익 (백만원)", value=200_000, step=10_000)
+            당기순이익 = st.number_input("당기순이익 (백만원)", value=150_000, step=10_000)
+            이자비용 = st.number_input("이자비용 (백만원)", value=20_000, step=1_000)
+            영업활동현금흐름 = st.number_input("영업활동현금흐름 (백만원)", value=180_000, step=10_000)
+
+        if st.button("🚀 분석 시작", type="primary"):
+            financial_data = {
+                '자산총계': 자산총계,
+                '부채총계': 부채총계,
+                '자본총계': 자본총계,
+                '유동자산': 유동자산,
+                '비유동자산': 자산총계 - 유동자산,
+                '유동부채': 유동부채,
+                '비유동부채': 부채총계 - 유동부채,
+                '현금및현금성자산': 현금,
+                '매출액': 매출액,
+                '매출원가': 매출원가,
+                '매출총이익': 매출액 - 매출원가,
+                '영업이익': 영업이익,
+                '당기순이익': 당기순이익,
+                '이자비용': 이자비용,
+                '영업활동현금흐름': 영업활동현금흐름,
+                # 기타 기본값
+                '단기금융상품': 0,
+                '매출채권': 유동자산 * 0.2,
+                '재고자산': 유동자산 * 0.1,
+                '유형자산': (자산총계 - 유동자산) * 0.6,
+                '무형자산': (자산총계 - 유동자산) * 0.1,
+                '단기차입금': 유동부채 * 0.3,
+                '장기차입금': (부채총계 - 유동부채) * 0.5,
+                '판매비와관리비': 매출액 * 0.2,
+                '매입채무': 유동부채 * 0.2,
+            }
+
+            company_info = {
+                'corp_name': '직접입력 기업',
+                'year': '2023'
+            }
+
+            run_analysis(financial_data, company_info)
+
+    # ===== 입력 모드 3: 샘플 데이터 =====
+    else:
+        st.header("📂 샘플 데이터")
+
+        st.info("샘플 기업 데이터로 시스템을 테스트해보세요.")
+
+        sample_type = st.selectbox(
+            "샘플 유형 선택",
+            [
+                "정상 기업 (부도 위험 낮음)",
+                "주의 기업 (일부 위험 요소)",
+                "위험 기업 (부도 위험 높음)"
+            ]
+        )
+
+        if st.button("📊 샘플 분석", type="primary"):
+            if "정상" in sample_type:
+                financial_data = create_sample_data("normal")
+                company_info = {'corp_name': '정상 샘플 기업', 'year': '2023'}
+            elif "주의" in sample_type:
+                financial_data = create_sample_data("caution")
+                company_info = {'corp_name': '주의 샘플 기업', 'year': '2023'}
             else:
-                input_data = sample_data
-            st.sidebar.success("✅ 샘플 데이터 5개 로딩 완료")
-        except:
-            st.sidebar.warning("샘플 데이터를 찾을 수 없습니다.")
+                financial_data = create_sample_data("risk")
+                company_info = {'corp_name': '위험 샘플 기업', 'year': '2023'}
 
-    # 예측 실행
-    if input_data is not None and st.sidebar.button("🔍 부도 위험 분석", type="primary"):
-        try:
-            # 결측치 처리
-            input_filled = input_data.fillna(input_data.median())
-            input_filled = input_filled.replace([np.inf, -np.inf], 0)
+            run_analysis(financial_data, company_info)
 
-            # 스케일링
-            input_scaled = scaler.transform(input_filled)
 
-            # 예측
-            risk_proba = model.predict_proba(input_scaled)[:, 1]
+def run_analysis(financial_data: dict, company_info: dict):
+    """
+    분석 실행 및 결과 표시
 
-            # 단일 기업 분석
-            if len(input_data) == 1:
-                risk_score = risk_proba[0]
-                risk_level, risk_icon, risk_msg = get_risk_level(risk_score)
-
-                # 대시보드 레이아웃
-                col1, col2, col3 = st.columns([1, 1, 1])
-
-                with col1:
-                    st.markdown(f"### {risk_icon} 위험 등급: **{risk_level}**")
-                    st.metric("부도 확률", f"{risk_score*100:.1f}%",
-                             delta=f"{(risk_score-0.5)*100:.1f}%p")
-                    st.info(risk_msg)
-
-                with col2:
-                    fig_gauge = create_risk_gauge(risk_score)
-                    st.plotly_chart(fig_gauge, use_container_width=True)
-
-                with col3:
-                    st.markdown("### 📊 종합 평가")
-                    st.metric("유동비율", f"{유동비율:.2f}",
-                             delta="정상" if 유동비율 > 1 else "경고",
-                             delta_color="normal" if 유동비율 > 1 else "inverse")
-                    st.metric("부채비율", f"{부채비율:.0f}%",
-                             delta="정상" if 부채비율 < 200 else "경고",
-                             delta_color="normal" if 부채비율 < 200 else "inverse")
-
-                # 상세 분석
-                st.markdown("---")
-                st.markdown("## 🔍 상세 위험 분석")
-
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    st.markdown("### 💡 주요 재무 지표")
-                    metrics_df = pd.DataFrame({
-                        '지표': ['유동비율', '부채비율', 'ROA', '매출액'],
-                        '값': [f"{유동비율:.2f}", f"{부채비율:.0f}%", f"{ROA*100:.2f}%", f"{매출액:,.0f}M"],
-                        '상태': [
-                            "✅" if 유동비율 > 1 else "⚠️",
-                            "✅" if 부채비율 < 200 else "⚠️",
-                            "✅" if ROA > 0 else "⚠️",
-                            "✅"
-                        ]
-                    })
-                    st.dataframe(metrics_df, hide_index=True, use_container_width=True)
-
-                with col2:
-                    st.markdown("### 🎯 개선 권장사항")
-                    recommendations = []
-
-                    if 유동비율 < 1:
-                        recommendations.append("⚠️ 단기 유동성 개선 필요")
-                    if 부채비율 > 200:
-                        recommendations.append("⚠️ 부채 비율 축소 권장")
-                    if ROA < 0:
-                        recommendations.append("⚠️ 수익성 개선 시급")
-                    if 영업현금흐름 < 0:
-                        recommendations.append("⚠️ 현금흐름 관리 필요")
-
-                    if not recommendations:
-                        st.success("✅ 전반적으로 양호한 재무 상태입니다")
-                    else:
-                        for rec in recommendations:
-                            st.warning(rec)
-
-            # 다중 기업 분석
-            else:
-                st.markdown("## 📊 다중 기업 부도 위험 분석")
-
-                results_df = pd.DataFrame({
-                    '기업 ID': range(1, len(risk_proba) + 1),
-                    '부도 확률': risk_proba,
-                    '위험 등급': [get_risk_level(p)[0] for p in risk_proba]
-                })
-
-                # 위험 분포
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    fig_hist = px.histogram(
-                        results_df, x='부도 확률',
-                        nbins=20,
-                        title='부도 확률 분포',
-                        color_discrete_sequence=['lightcoral']
-                    )
-                    st.plotly_chart(fig_hist, use_container_width=True)
-
-                with col2:
-                    risk_counts = results_df['위험 등급'].value_counts()
-                    fig_pie = px.pie(
-                        values=risk_counts.values,
-                        names=risk_counts.index,
-                        title='위험 등급 분포',
-                        color_discrete_sequence=px.colors.sequential.RdYlGn_r
-                    )
-                    st.plotly_chart(fig_pie, use_container_width=True)
-
-                # 결과 테이블
-                st.markdown("### 🏢 기업별 분석 결과")
-                st.dataframe(
-                    results_df.sort_values('부도 확률', ascending=False),
-                    hide_index=True,
-                    use_container_width=True
-                )
-
-        except Exception as e:
-            st.error(f"⚠️ 예측 중 오류 발생: {str(e)}")
-            st.exception(e)
-
-    # 푸터
+    Args:
+        financial_data: 재무제표 데이터
+        company_info: 기업 정보
+    """
     st.markdown("---")
-    st.markdown("""
-    ### 📌 사용 안내
-    - **수동 입력**: 주요 재무 지표를 직접 입력하여 분석
-    - **CSV 업로드**: 여러 기업의 데이터를 한번에 분석
-    - **샘플 데이터**: 테스트용 샘플 데이터로 기능 확인
+    st.header(f"📊 분석 결과: {company_info.get('corp_name', '기업')}")
 
-    ### ⚠️ 주의사항
-    - 이 시스템은 참고용이며, 최종 의사결정은 전문가와 상담 필요
-    - 모델은 역사적 데이터 기반으로 학습되었습니다
-    - 정기적인 모델 업데이트가 필요합니다
+    # 1. 특성 생성
+    with st.spinner("도메인 특성 생성 중..."):
+        generator = DomainFeatureGenerator()
+        features_df = generator.generate_all_features(financial_data)
 
-    ---
-    🤖 Powered by AI | 도메인 지식 기반 부도 예측 모델
-    """)
+    st.success(f"✓ {len(features_df.columns)}개 특성 생성 완료")
 
+    # 2. 예측
+    with st.spinner("부도 위험 예측 중..."):
+        predictor = load_predictor()
+        result = predictor.predict(features_df)
+
+    st.success("✓ 예측 완료")
+
+    # ========== 섹션 1: 종합 평가 ==========
+    display_overall_assessment(result, features_df, financial_data)
+
+    # ========== 섹션 2: 위험 요인 분석 ==========
+    display_risk_analysis(result, features_df)
+
+    # ========== 섹션 3: 개선 권장사항 ==========
+    display_recommendations(features_df, financial_data)
+
+    # ========== 섹션 4: 상세 특성 ==========
+    display_detailed_features(features_df)
+
+    # ========== 섹션 5: 재무제표 원본 ==========
+    display_financial_statements(financial_data)
+
+
+def display_overall_assessment(result: dict, features_df: pd.DataFrame, financial_data: dict):
+    """섹션 1: 종합 평가"""
+    st.markdown("## 🎯 종합 부도 위험 평가")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        risk_prob = result['bankruptcy_probability']
+        st.metric(
+            label="부도 확률",
+            value=f"{risk_prob*100:.1f}%",
+            delta=f"{result['risk_level']} {result['risk_icon']}"
+        )
+
+    with col2:
+        st.metric(
+            label="위험 등급",
+            value=result['risk_level'],
+            delta=result['risk_icon']
+        )
+
+    with col3:
+        건전성지수 = features_df.get('재무건전성지수', pd.Series([50])).iloc[0]
+        st.metric(
+            label="재무 건전성",
+            value=f"{건전성지수:.0f}점",
+            delta="100점 만점"
+        )
+
+    with col4:
+        경보신호수 = int(features_df.get('조기경보신호수', pd.Series([0])).iloc[0])
+        st.metric(
+            label="조기경보신호",
+            value=f"{경보신호수}개",
+            delta="위험신호 개수"
+        )
+
+    # 게이지 차트
+    st.plotly_chart(create_risk_gauge(risk_prob), use_container_width=True)
+
+    # 메시지
+    st.info(f"**분석 결과:** {result['risk_message']}")
+
+
+def display_risk_analysis(result: dict, features_df: pd.DataFrame):
+    """섹션 2: 위험 요인 분석"""
+    st.markdown("---")
+    st.markdown("## 🔍 위험 요인 상세 분석")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### 🔴 Critical 리스크 (즉시 조치 필요)")
+
+        critical_risks = identify_critical_risks(features_df)
+
+        if critical_risks:
+            for risk in critical_risks:
+                st.error(
+                    f"**{risk['name']}**: {risk['value']:.2f} "
+                    f"(기준: {risk['threshold']:.2f})\n\n"
+                    f"→ {risk['explanation']}"
+                )
+        else:
+            st.success("✓ Critical 리스크 없음")
+
+    with col2:
+        st.markdown("### 🟡 Warning (개선 권장)")
+
+        warnings = identify_warnings(features_df)
+
+        if warnings:
+            for warning in warnings:
+                st.warning(
+                    f"**{warning['name']}**: {warning['value']:.2f} "
+                    f"(권장: {warning['threshold']:.2f})"
+                )
+        else:
+            st.success("✓ Warning 없음")
+
+    # SHAP-style Waterfall 차트
+    st.markdown("### 📊 주요 위험 요인 기여도")
+    fig_shap = create_shap_waterfall(features_df.iloc[0])
+    st.plotly_chart(fig_shap, use_container_width=True)
+
+
+def display_recommendations(features_df: pd.DataFrame, financial_data: dict):
+    """섹션 3: 개선 권장사항"""
+    st.markdown("---")
+    st.markdown("## 💡 실행 가능한 개선 권장사항")
+
+    recommendations = generate_recommendations(features_df, financial_data)
+
+    for i, rec in enumerate(recommendations, 1):
+        with st.expander(
+            f"권장사항 {i}: {rec['title']} (우선순위: {rec['priority']})",
+            expanded=(i == 1)
+        ):
+            st.markdown(f"**현재 상태:**\n{rec['current_status']}")
+            st.markdown(f"**문제점:**\n{rec['problem']}")
+            st.markdown(f"**개선 방안:**{rec['solution']}")
+            st.markdown(f"**예상 효과:**\n{rec['expected_impact']}")
+
+
+def display_detailed_features(features_df: pd.DataFrame):
+    """섹션 4: 상세 특성"""
+    st.markdown("---")
+    with st.expander("📋 생성된 특성 상세 보기"):
+        st.markdown(f"총 {len(features_df.columns)}개 특성이 생성되었습니다.")
+
+        # 카테고리별로 분류
+        categories = {
+            '유동성': [col for col in features_df.columns if any(kw in col for kw in ['유동', '현금', '운전자본'])],
+            '지급불능': [col for col in features_df.columns if any(kw in col for kw in ['부채', '자본', '이자', '레버리지'])],
+            '재무조작': [col for col in features_df.columns if any(kw in col for kw in ['발생액', '채권', '재고', '조작', '이익의질'])],
+            '복합리스크': [col for col in features_df.columns if any(kw in col for kw in ['위험', '지수', '신호', '건전성'])]
+        }
+
+        for cat_name, cols in categories.items():
+            if cols:
+                st.markdown(f"**{cat_name} 특성 ({len(cols)}개)**")
+                cat_df = features_df[cols].T
+                cat_df.columns = ['값']
+                st.dataframe(cat_df, use_container_width=True)
+
+
+def display_financial_statements(financial_data: dict):
+    """섹션 5: 재무제표 원본"""
+    st.markdown("---")
+    with st.expander("📋 재무제표 원본 데이터 보기"):
+        # 재무상태표
+        st.markdown("### 재무상태표")
+        bs_data = {
+            '항목': ['자산총계', '유동자산', '비유동자산', '부채총계', '유동부채', '비유동부채', '자본총계'],
+            '금액 (백만원)': [
+                financial_data.get('자산총계', 0),
+                financial_data.get('유동자산', 0),
+                financial_data.get('비유동자산', 0),
+                financial_data.get('부채총계', 0),
+                financial_data.get('유동부채', 0),
+                financial_data.get('비유동부채', 0),
+                financial_data.get('자본총계', 0)
+            ]
+        }
+        st.dataframe(pd.DataFrame(bs_data), use_container_width=True)
+
+        # 손익계산서
+        st.markdown("### 손익계산서")
+        is_data = {
+            '항목': ['매출액', '매출원가', '매출총이익', '영업이익', '당기순이익'],
+            '금액 (백만원)': [
+                financial_data.get('매출액', 0),
+                financial_data.get('매출원가', 0),
+                financial_data.get('매출총이익', 0),
+                financial_data.get('영업이익', 0),
+                financial_data.get('당기순이익', 0)
+            ]
+        }
+        st.dataframe(pd.DataFrame(is_data), use_container_width=True)
+
+
+def create_sample_data(sample_type: str) -> dict:
+    """샘플 데이터 생성"""
+    if sample_type == "normal":
+        return {
+            '자산총계': 1_000_000, '부채총계': 400_000, '자본총계': 600_000,
+            '유동자산': 600_000, '비유동자산': 400_000,
+            '유동부채': 200_000, '비유동부채': 200_000,
+            '현금및현금성자산': 200_000, '단기금융상품': 100_000,
+            '매출채권': 150_000, '재고자산': 80_000,
+            '유형자산': 250_000, '무형자산': 50_000,
+            '단기차입금': 50_000, '장기차입금': 100_000,
+            '매출액': 2_000_000, '매출원가': 1_200_000, '매출총이익': 800_000,
+            '판매비와관리비': 400_000, '영업이익': 400_000,
+            '이자비용': 10_000, '당기순이익': 300_000,
+            '영업활동현금흐름': 350_000, '매입채무': 100_000,
+        }
+    elif sample_type == "caution":
+        return {
+            '자산총계': 1_000_000, '부채총계': 700_000, '자본총계': 300_000,
+            '유동자산': 400_000, '비유동자산': 600_000,
+            '유동부채': 400_000, '비유동부채': 300_000,
+            '현금및현금성자산': 50_000, '단기금융상품': 20_000,
+            '매출채권': 180_000, '재고자산': 100_000,
+            '유형자산': 400_000, '무형자산': 100_000,
+            '단기차입금': 150_000, '장기차입금': 250_000,
+            '매출액': 1_500_000, '매출원가': 1_000_000, '매출총이익': 500_000,
+            '판매비와관리비': 350_000, '영업이익': 150_000,
+            '이자비용': 50_000, '당기순이익': 80_000,
+            '영업활동현금흐름': 100_000, '매입채무': 120_000,
+        }
+    else:  # risk
+        return {
+            '자산총계': 1_000_000, '부채총계': 950_000, '자본총계': 50_000,
+            '유동자산': 300_000, '비유동자산': 700_000,
+            '유동부채': 500_000, '비유동부채': 450_000,
+            '현금및현금성자산': 20_000, '단기금융상품': 5_000,
+            '매출채권': 150_000, '재고자산': 80_000,
+            '유형자산': 500_000, '무형자산': 100_000,
+            '단기차입금': 250_000, '장기차입금': 400_000,
+            '매출액': 1_000_000, '매출원가': 800_000, '매출총이익': 200_000,
+            '판매비와관리비': 180_000, '영업이익': 20_000,
+            '이자비용': 80_000, '당기순이익': -50_000,
+            '영업활동현금흐름': 10_000, '매입채무': 150_000,
+        }
+
+
+# ========== 앱 실행 ==========
 
 if __name__ == "__main__":
     main()
