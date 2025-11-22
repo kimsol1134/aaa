@@ -129,7 +129,10 @@ class FinancialStatementParser:
         for statement_type in ['balance_sheet', 'income_statement', 'cash_flow']:
             raw_data = dart_response.get(statement_type, {})
             mapped_data = self._map_accounts(raw_data)
-            standardized.update(mapped_data)
+            # 0이 아닌 값만 업데이트 (나중 재무제표가 이전 값을 0으로 덮어쓰는 것 방지)
+            for key, value in mapped_data.items():
+                if value != 0 or key not in standardized:
+                    standardized[key] = value
 
         # 금액 단위 변환
         if self.unit_conversion != 1:
