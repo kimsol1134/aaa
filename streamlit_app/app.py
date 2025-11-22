@@ -118,9 +118,14 @@ def main():
             )
 
         with col2:
+            # 동적으로 회계연도 생성 (현재 년도부터 과거 5년)
+            from datetime import datetime
+            current_year = datetime.now().year
+            year_options = [str(current_year - i) for i in range(6)]  # 2024, 2023, 2022, 2021, 2020, 2019
+
             year = st.selectbox(
                 "회계연도",
-                options=["2023", "2022", "2021", "2020"],
+                options=year_options,
                 index=0
             )
 
