@@ -254,21 +254,61 @@ results = pd.DataFrame([
 
 #### 7️⃣ Traffic Light 시스템 (부도 위험 3등급 분류)
 
-**고정 임계값** (반드시 이 값 사용):
-- Yellow (주의): 확률 >= 0.02 (2%)
-- Red (위험): 확률 >= 0.05 (5%)
+**임계값 결정 방법** (모델 결과 기반 최적화):
 
+**Step 1: F1-Score 기반 최적 임계값 탐색**
 ```python
-def traffic_light_classification(y_prob):
+from sklearn.metrics import precision_recall_curve, f1_score
+
+# PR Curve에서 모든 임계값 테스트
+precisions, recalls, thresholds = precision_recall_curve(y_test, y_prob)
+
+# F1-Score 계산
+f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-10)
+optimal_threshold = thresholds[np.argmax(f1_scores)]
+
+print(f"F1-Score 최적 임계값: {optimal_threshold:.4f}")
+```
+
+**Step 2: 비즈니스 요구사항 반영**
+```python
+# 목표: Recall >= 60% 보장 (부도 기업의 60% 이상 탐지)
+target_recall = 0.6
+
+# Recall >= 60%를 만족하는 최대 Precision 임계값 찾기
+idx = np.where(recalls >= target_recall)[0]
+if len(idx) > 0:
+    business_threshold = thresholds[idx[np.argmax(precisions[idx])]]
+    print(f"Recall 60% 보장 임계값: {business_threshold:.4f}")
+```
+
+**Step 3: Traffic Light 임계값 설정**
+```python
+# Red 임계값: 비즈니스 임계값 또는 상위 5% 백분위수
+red_threshold = max(business_threshold, np.percentile(y_prob, 95))
+
+# Yellow 임계값: Red의 40% 수준 또는 상위 15% 백분위수
+yellow_threshold = max(red_threshold * 0.4, np.percentile(y_prob, 85))
+
+print(f"\n최종 임계값:")
+print(f"  Yellow (주의): >= {yellow_threshold:.4f}")
+print(f"  Red (위험):    >= {red_threshold:.4f}")
+
+# 분류 함수
+def traffic_light_classification(y_prob, yellow_th, red_th):
     conditions = [
-        (y_prob >= 0.05),           # Red
-        (y_prob >= 0.02)            # Yellow
+        (y_prob >= red_th),      # Red
+        (y_prob >= yellow_th)    # Yellow
     ]
     choices = ['Red (위험)', 'Yellow (주의)']
     return np.select(conditions, choices, default='Green (안전)')
 
-grades = traffic_light_classification(y_prob_test)
+grades = traffic_light_classification(y_prob_test, yellow_threshold, red_threshold)
 ```
+
+**참고 임계값 (04 노트북 결과)**:
+- Yellow: 0.02 (2%), Red: 0.05 (5%)
+- 하지만 모델 성능에 따라 조정 필요 (위 로직 사용)
 
 **출력해야 할 통계**:
 
@@ -281,6 +321,11 @@ grades = traffic_light_classification(y_prob_test)
 
 **리스크 방어율**: (Red + Yellow에서 포착한 부도 수) / 전체 부도 수 × 100
 
+**임계값 결정 기준**:
+- ✅ F1-Score 최적화
+- ✅ Recall >= 60% 보장 (비즈니스 요구)
+- ✅ 상위 5~15% 기업을 집중 관리 대상으로 선정
+
 ---
 
 #### 8️⃣ 시각화 (필수 포함)
@@ -291,12 +336,14 @@ grades = traffic_light_classification(y_prob_test)
 
 **2. PR-AUC Curve**
 - Precision-Recall 곡선
-- 현재 임계값(0.05) 위치 빨간 점 표시
+- 현재 Red 임계값 위치 빨간 점 표시 (동적 임계값 사용)
+- Yellow 임계값 위치 노란 점 표시
 - AUC 값 제목에 표시
 
-**3. Confusion Matrix (임계값 0.05 기준)**
+**3. Confusion Matrix (Red 임계값 기준)**
 - Plotly Heatmap
 - TN, FP, FN, TP 명확히 표기
+- 제목에 사용된 임계값 표시
 
 **4. 예측 확률 분포**
 - 정상 기업(초록색) vs 부도 기업(빨간색) 히스토그램
@@ -312,16 +359,88 @@ grades = traffic_light_classification(y_prob_test)
 
 ---
 
-#### 9️⃣ 모델 저장
+#### 9️⃣ 모델 저장 (Part 4 SHAP 분석 대비)
+
+**중요**: Part 4에서 SHAP 분석을 수행하므로, SHAP이 잘 작동하도록 모델을 저장해야 합니다.
 
 ```python
-# 1. 최종 모델 (파이프라인 포함)
-joblib.dump(final_model, '../data/processed/발표_Part3_최종모델.pkl')
+import joblib
+import os
 
-# 2. 분류기만 (전처리 제외)
-classifier_only = final_model.named_steps['classifier']
-joblib.dump(classifier_only, '../data/processed/발표_Part3_분류기.pkl')
+save_dir = '../data/processed/'
+os.makedirs(save_dir, exist_ok=True)
+
+# 1. 최종 모델 (전체 파이프라인 포함)
+joblib.dump(final_model, os.path.join(save_dir, '발표_Part3_최종모델.pkl'))
+print(f"✅ 전체 파이프라인 저장: 발표_Part3_최종모델.pkl")
+
+# 2. 분류기만 (SHAP 분석용) ⭐ 중요!
+if hasattr(final_model, 'named_steps'):
+    classifier_only = final_model.named_steps['classifier']
+else:
+    classifier_only = final_model
+
+joblib.dump(classifier_only, os.path.join(save_dir, '발표_Part3_분류기.pkl'))
+print(f"✅ 분류기만 저장: 발표_Part3_분류기.pkl (SHAP용)")
+
+# 3. 전처리된 데이터 저장 (SHAP 분석용) ⭐ 중요!
+# SHAP은 전처리된 데이터가 필요하므로 Train/Test 데이터를 전처리 후 저장
+from sklearn.pipeline import Pipeline
+
+# 전처리만 수행하는 파이프라인 생성
+preprocessing_only = Pipeline([
+    ('inf_handler', final_model.named_steps['inf_handler']),
+    ('winsorizer', final_model.named_steps['winsorizer']),
+    ('log_transformer', final_model.named_steps['log_transformer']),
+    ('imputer', final_model.named_steps['imputer']),
+    ('scaler', final_model.named_steps['scaler'])
+])
+
+# 전처리 적용
+X_train_processed = preprocessing_only.transform(X_train)
+X_test_processed = preprocessing_only.transform(X_test)
+
+# 데이터프레임으로 변환 (컬럼명 유지)
+X_train_processed_df = pd.DataFrame(X_train_processed, columns=X_train.columns)
+X_test_processed_df = pd.DataFrame(X_test_processed, columns=X_test.columns)
+
+# 저장
+X_train_processed_df.to_csv(os.path.join(save_dir, '발표_Part3_X_train_processed.csv'),
+                             index=False, encoding='utf-8-sig')
+X_test_processed_df.to_csv(os.path.join(save_dir, '발표_Part3_X_test_processed.csv'),
+                            index=False, encoding='utf-8-sig')
+y_train.to_csv(os.path.join(save_dir, '발표_Part3_y_train.csv'),
+               index=False, encoding='utf-8-sig', header=['target'])
+y_test.to_csv(os.path.join(save_dir, '발표_Part3_y_test.csv'),
+              index=False, encoding='utf-8-sig', header=['target'])
+
+print(f"✅ 전처리된 Train/Test 데이터 저장 (SHAP 분석용)")
+
+# 4. 임계값 저장 (Traffic Light 시스템용)
+thresholds = {
+    'yellow_threshold': yellow_threshold,
+    'red_threshold': red_threshold,
+    'optimal_f1_threshold': optimal_threshold
+}
+joblib.dump(thresholds, os.path.join(save_dir, '발표_Part3_임계값.pkl'))
+print(f"✅ Traffic Light 임계값 저장")
+
+print("\n" + "="*60)
+print("Part 4 SHAP 분석을 위한 필수 파일:")
+print("  1. 발표_Part3_분류기.pkl - SHAP explainer 생성용")
+print("  2. 발표_Part3_X_train_processed.csv - Background 데이터")
+print("  3. 발표_Part3_X_test_processed.csv - 설명 대상 데이터")
+print("="*60)
 ```
+
+**저장되는 파일 목록**:
+1. `발표_Part3_최종모델.pkl`: 전체 파이프라인 (배포용)
+2. `발표_Part3_분류기.pkl`: 분류기만 (SHAP 분석용) ⭐
+3. `발표_Part3_X_train_processed.csv`: 전처리된 학습 데이터 (SHAP background) ⭐
+4. `발표_Part3_X_test_processed.csv`: 전처리된 테스트 데이터 (SHAP 설명 대상) ⭐
+5. `발표_Part3_y_train.csv`: 학습 타겟
+6. `발표_Part3_y_test.csv`: 테스트 타겟
+7. `발표_Part3_임계값.pkl`: Traffic Light 임계값
 
 ---
 
@@ -410,6 +529,7 @@ joblib.dump(classifier_only, '../data/processed/발표_Part3_분류기.pkl')
 - [ ] Traffic Light 통계 표 완성
 - [ ] 리스크 방어율 계산 및 출력
 - [ ] 최종 모델 pkl 파일 저장
+- [ ] SHAP 분석용 파일 저장 (분류기.pkl, X_train/test_processed.csv)
 
 ---
 
@@ -417,11 +537,11 @@ joblib.dump(classifier_only, '../data/processed/발표_Part3_분류기.pkl')
 
 1. **Optuna 사용 금지** → RandomizedSearchCV만 사용
 2. **Stacking 앙상블 금지** → Weighted Voting만 사용
-3. **임계값 변경 금지** → 0.02, 0.05 고정
-4. **시계열 로직 금지** → 시간 순서 의존 코드 작성 안 함
-5. **Train/Test 전에 리샘플링 금지** → 파이프라인 내에서만 리샘플링
-6. **Category dtype 수치 계산 금지** → 먼저 .cat.codes로 변환
-7. **ROC-AUC 주요 메트릭 사용 금지** → PR-AUC가 핵심
+3. **시계열 로직 금지** → 시간 순서 의존 코드 작성 안 함
+4. **Train/Test 전에 리샘플링 금지** → 파이프라인 내에서만 리샘플링
+5. **Category dtype 수치 계산 금지** → 먼저 .cat.codes로 변환
+6. **ROC-AUC 주요 메트릭 사용 금지** → PR-AUC가 핵심
+7. **SHAP 분석용 파일 누락 금지** → 전처리된 데이터와 분류기 반드시 저장
 
 ---
 
