@@ -26,6 +26,7 @@ wheels/
 # Jupyter Notebook
 .ipynb_checkpoints
 *.ipynb_checkpoints/
+*_executed.ipynb
 
 # Data files (large CSV and model files)
 data/기업신용평가정보_*.csv
