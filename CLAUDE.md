@@ -32,6 +32,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 독립적인 데이터 포인트로 처리 (횡단면 데이터)
 - 2021년 8월 기준 스냅샷 데이터
 
+### 4. 실행된 노트북 관리
+- **`*_executed.ipynb` 파일은 git에 포함** - .gitignore에서 제외
+- 발표용 노트북의 실행 결과를 확인하기 위해 executed 버전을 커밋
+- 예: `발표_Part1_문제정의_및_핵심발견_executed.ipynb`
+- papermill로 실행된 노트북은 출력 결과와 함께 저장되어 검토 가능
+
 ## 개발 환경 설정
 
 ### 패키지 설치
