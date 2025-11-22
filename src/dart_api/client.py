@@ -18,6 +18,9 @@ import time
 import logging
 from typing import Dict, List, Optional
 from datetime import datetime
+import zipfile
+import io
+import xml.etree.ElementTree as ET
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -41,6 +44,52 @@ class DartAPIClient:
         self.api_key = api_key
         self.last_request_time = 0
         self.session = requests.Session()
+        self.corp_codes = {}  # 기업 코드 캐시 (회사명 -> corp_code 매핑)
+
+        # corpCode.xml 다운로드 및 파싱
+        self._load_corp_codes()
+
+    def _load_corp_codes(self):
+        """
+        DART에서 제공하는 corpCode.xml 파일을 다운로드하고 파싱
+        회사명 -> corp_code 매핑 테이블 생성
+        """
+        try:
+            logger.info("기업 코드 목록(corpCode.xml) 다운로드 중...")
+
+            # corpCode.zip 다운로드
+            url = f"{self.BASE_URL}/corpCode.xml"
+            params = {'crtfc_key': self.api_key}
+
+            response = self.session.get(url, params=params, timeout=30)
+            response.raise_for_status()
+
+            # ZIP 파일 압축 해제
+            with zipfile.ZipFile(io.BytesIO(response.content)) as zip_file:
+                # CORPCODE.xml 파일 읽기 (대문자 주의)
+                xml_content = zip_file.read('CORPCODE.xml')
+
+            # XML 파싱
+            root = ET.fromstring(xml_content)
+
+            # 기업 코드 매핑 생성
+            for company in root.findall('list'):
+                corp_code = company.find('corp_code').text
+                corp_name = company.find('corp_name').text
+                stock_code = company.find('stock_code')
+
+                if corp_name and corp_code:
+                    self.corp_codes[corp_name] = {
+                        'corp_code': corp_code,
+                        'corp_name': corp_name,
+                        'stock_code': stock_code.text if stock_code is not None and stock_code.text else None
+                    }
+
+            logger.info(f"✓ 기업 코드 {len(self.corp_codes):,}개 로드 완료")
+
+        except Exception as e:
+            logger.error(f"기업 코드 로드 실패: {str(e)}")
+            logger.warning("기업 검색 기능이 제한될 수 있습니다.")
 
     def _handle_rate_limit(self):
         """API Rate Limit 관리 (1초당 1회 제한)"""
@@ -120,45 +169,50 @@ class DartAPIClient:
         기업명으로 종목코드 검색
 
         Args:
-            company_name: 기업명 (예: "삼성전자")
+            company_name: 기업명 (예: "삼성전자") 또는 종목코드 (예: "005930")
 
         Returns:
             {
                 'corp_code': '00126380',
                 'corp_name': '삼성전자',
-                'stock_code': '005930',
-                'modify_date': '20231201'
+                'stock_code': '005930'
             }
 
         Raises:
             ValueError: 기업을 찾을 수 없음
         """
-        # 회사명으로 검색 (corpCode.xml 사용)
-        # 실제 구현에서는 DART에서 제공하는 corpCode.xml을 파싱해야 합니다
-        # 여기서는 단순화를 위해 API endpoint 사용
-
-        endpoint = "company.json"
-        params = {
-            'corp_name': company_name
-        }
-
         try:
-            data = self._make_request(endpoint, params)
+            # 1. 정확한 회사명으로 검색
+            if company_name in self.corp_codes:
+                result = self.corp_codes[company_name]
+                logger.info(f"기업 검색 성공: {result['corp_name']} ({result.get('stock_code', 'N/A')})")
+                return result
 
-            if not data.get('list'):
-                raise ValueError(f"'{company_name}' 기업을 찾을 수 없습니다.")
+            # 2. 종목코드로 검색
+            if company_name.isdigit():
+                for corp_info in self.corp_codes.values():
+                    if corp_info.get('stock_code') == company_name:
+                        logger.info(f"종목코드 검색 성공: {corp_info['corp_name']} ({company_name})")
+                        return corp_info
 
-            # 가장 유사한 결과 반환
-            result = data['list'][0]
+            # 3. 부분 일치 검색 (회사명에 포함)
+            matches = []
+            for corp_name, corp_info in self.corp_codes.items():
+                if company_name in corp_name or corp_name in company_name:
+                    matches.append(corp_info)
 
-            logger.info(f"기업 검색 성공: {result.get('corp_name')} ({result.get('stock_code')})")
+            if matches:
+                # 가장 짧은 이름 (가장 유사한 결과) 반환
+                result = min(matches, key=lambda x: len(x['corp_name']))
+                logger.info(f"부분 일치 검색 성공: {result['corp_name']} ({result.get('stock_code', 'N/A')})")
+                return result
 
-            return {
-                'corp_code': result.get('corp_code'),
-                'corp_name': result.get('corp_name'),
-                'stock_code': result.get('stock_code'),
-                'modify_date': result.get('modify_date')
-            }
+            # 검색 실패
+            raise ValueError(
+                f"'{company_name}' 기업을 찾을 수 없습니다.\n"
+                f"정확한 회사명이나 종목코드를 입력하세요.\n"
+                f"예: '삼성전자', 'SK하이닉스', '005930'"
+            )
 
         except Exception as e:
             logger.error(f"기업 검색 실패: {str(e)}")
