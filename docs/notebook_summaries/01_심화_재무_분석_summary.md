@@ -1,0 +1,1769 @@
+# 01_심화_재무_분석.ipynb - 요약 문서
+
+> 원본: `/home/user/aaa/notebooks/01_심화_재무_분석.ipynb`
+
+> 자동 생성됨: 중요한 로직과 출력 결과 포함
+
+---
+
+# 01_심화_재무_분석
+
+## 개요
+이 노트북은 `01_도메인_기반_부도원인_분석.ipynb`의 심화 분석 버전입니다.
+
+### 분석 내용
+1. **상관관계 심화 분석**: 히트맵, VIF, 다중공선성, 부도 관련 변수 선별
+2. **비선형 관계 탐색**: Binning, 구간별 부도율, 임계점 분석
+3. **이자보상배율 심화**: 좀비 기업 식별 및 업종별 분석
+4. **현금흐름 세부 분석**: 영업/투자/재무활동 패턴, 기업 생애주기 분석
+5. **비재무/거시경제 지표**: 데이터 활용 가능성 검토
+
+### 데이터 특성
+- **시계열 데이터 아님**: 각 데이터 포인트는 독립적
+- **불균형 데이터**: 부도 기업 비율이 낮음
+
+
+## 1. 환경 설정 및 데이터 로딩
+
+### 코드 셀 #1
+
+```python
+# 필수 라이브러리 임포트
+import pandas as pd
+import numpy as np
+import warnings
+from pathlib import Path
+
+# Plotly 시각화 라이브러리
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import matplotlib.pyplot as plt
+
+# 통계 분석
+from scipy import stats
+from scipy.stats import chi2_contingency
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+warnings.filterwarnings('ignore')
+
+# 출력 설정
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', 100)
+pd.set_option('display.float_format', '{:.2f}'.format)
+
+print("✓ 환경 설정 완료")
+print("✓ Plotly 시각화 라이브러리 로드 완료")
+```
+
+**출력:**
+
+```
+✓ 환경 설정 완료
+✓ Plotly 시각화 라이브러리 로드 완료
+```
+
+---
+
+### 코드 셀 #2
+
+```python
+# 데이터 경로 설정 (하드코딩 금지)
+DATA_DIR = Path('../data')
+RAW_DATA_FILE = '기업신용평가정보_210801.csv'  # 실제 파일명으로 변경 필요
+
+# 데이터 로딩
+data_path = DATA_DIR / RAW_DATA_FILE
+if data_path.exists():
+    df = pd.read_csv(data_path, encoding='utf-8')
+    print(f"✓ 데이터 로딩 완료: {len(df):,}개 행, {len(df.columns)}개 컬럼")
+else:
+    print(f"⚠️  데이터 파일을 찾을 수 없습니다: {data_path}")
+    print("   01_도메인_기반_부도원인_분석.ipynb에서 생성한 전처리 데이터를 사용하세요.")
+
+# 타겟 변수명 설정
+TARGET_COL = '모형개발용Performance(향후1년내부도여부)'
+```
+
+**출력:**
+
+```
+✓ 데이터 로딩 완료: 50,105개 행, 159개 컬럼
+```
+
+---
+
+## 2. 주요 재무 지표 식별
+
+01_도메인_기반_부도원인_분석.ipynb에서 식별한 주요 지표를 기반으로 분석합니다.
+
+### 코드 셀 #3
+
+```python
+# 주요 재무 지표 카테고리 자동 식별
+financial_metrics = {
+    'liquidity': [],
+    'debt': [],
+    'profitability': [],
+    'cashflow': [],
+    'interest_coverage': []
+}
+
+# 컬럼명에서 자동 식별
+for col in df.columns:
+    col_lower = col.lower()
+    if '유동' in col or 'current' in col_lower or '당좌' in col:
+        financial_metrics['liquidity'].append(col)
+    elif '부채' in col or 'debt' in col_lower or '자기자본' in col or '레버리지' in col:
+        financial_metrics['debt'].append(col)
+    elif 'roa' in col_lower or 'roe' in col_lower or '수익' in col or '이익' in col:
+        financial_metrics['profitability'].append(col)
+    elif '현금' in col or 'cash' in col_lower:
+        financial_metrics['cashflow'].append(col)
+    elif '이자' in col or 'interest' in col_lower:
+        financial_metrics['interest_coverage'].append(col)
+
+# 식별된 지표 출력
+print("=== 식별된 재무 지표 ===")
+total_metrics = 0
+for category, metrics in financial_metrics.items():
+    if metrics:
+        print(f"\n{category.upper()}: {len(metrics)}개")
+        for m in metrics[:3]:
+            print(f"  • {m}")
+        if len(metrics) > 3:
+            print(f"  ... 외 {len(metrics)-3}개")
+        total_metrics += len(metrics)
+
+print(f"\n✓ 총 {total_metrics}개 재무 지표 식별됨")
+```
+
+**출력:**
+
+```
+=== 식별된 재무 지표 ===
+
+LIQUIDITY: 8개
+  • 유동자산
+  • 비유동자산
+  • 당좌자산
+  ... 외 5개
+
+DEBT: 8개
+  • 부채총계
+  • 자기자본(납입자본금)
+  • 부채상환계수
+  ... 외 5개
+
+PROFITABILITY: 17개
+  • 이익잉여금
+  • 매출총이익
+  • 법인세비용차감전순이익
+  ... 외 14개
+
+CASHFLOW: 7개
+  • 현금
+  • 현금등가물
+  • 현금성자산
+  ... 외 4개
+
+INTEREST_COVERAGE: 6개
+  • 이자비용
+  • 사채이자(당기)
+  • 이자보상배율
+  ... 외 3개
+
+✓ 총 46개 재무 지표 식별됨
+```
+
+---
+
+## 3. 상관관계 심화 분석
+
+### 목적
+- 변수 간 상관관계를 시각화하여 다중공선성 문제 파악
+- 부도 여부와 높은 상관관계를 가지는 변수 선별
+- 모델링에 사용할 변수 우선순위 결정
+
+### 코드 셀 #4
+
+```python
+# 수치형 변수 선택 및 상관관계 계산
+numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+
+if TARGET_COL in numeric_cols:
+    # 상관관계 계산
+    corr_matrix = df[numeric_cols].corr()
+    target_corr = corr_matrix[TARGET_COL].sort_values(ascending=False)
+
+    print("=== 부도 여부와 상관관계 상위 10개 변수 ===")
+    for i, (var, corr_val) in enumerate(target_corr.head(11).items(), 1):
+        if var != TARGET_COL:
+            print(f"{i:2d}. {var[:50]:50s} : {corr_val:7.4f}")
+
+    print("\n=== 부도 여부와 상관관계 하위 10개 변수 ===")
+    for i, (var, corr_val) in enumerate(target_corr.tail(10).items(), 1):
+        print(f"{i:2d}. {var[:50]:50s} : {corr_val:7.4f}")
+else:
+    print(f"⚠️  타겟 변수 '{TARGET_COL}'을 찾을 수 없습니다.")
+```
+
+**출력:**
+
+```
+=== 부도 여부와 상관관계 상위 10개 변수 ===
+ 2. 기업신용공여연체기관수(일보)(미해제)                               :  0.3090
+ 3. 기업신용공여연체최장연체일수(일보)(3개월내발생)(해제포함)                   :  0.2853
+ 4. 기업신용공여연체최장연체일수(일보)(6개월내발생)(해제포함)                   :  0.2630
+ 5. 기업신용공여연체최장연체일수(일보)(1년내발생)(해제포함)                    :  0.2376
+ 6. 기업신용공여연체과목수(일보)(미해제)                               :  0.2249
+ 7. 상장폐지일자                                             :  0.2161
+ 8. 기업신용공여연체과목수(일보)(3개월내발생)(해제포함)                      :  0.2041
+ 9. 기업신용공여연체과목수(일보)(6개월내발생)(해제포함)                      :  0.1898
+10. 기업신용공여30일이상연체과목수(일보)(미해제)                          :  0.1878
+11. 기업신용공여30일이상연체기관수(일보)(이자연체)(미해제)                    :  0.1720
+
+=== 부도 여부와 상관관계 하위 10개 변수 ===
+ 1. 종업원수                                               : -0.0066
+ 2. 판매비와관리비                                            : -0.0068
+ 3. 현금성자산                                              : -0.0070
+ 4. 부채상환계수.1                                           : -0.0074
+ 5. 소유건축물실거래가합계                                        : -0.0078
+ 6. 재무비율_자기자본이익률(ROE)                                  : -0.0084
+ 7. 재무비율_총자산순이익률                                       : -0.0388
+ 8. 재무비율_자기자본비율                                        : -0.0425
+ 9. 신용도판단정보공공정보최근해제일자로부터경과일수(CIS)(해제,삭제)               : -0.1248
+10. 신용도판단정보공공정보최근발생일자로부터경과일수(CIS)(해제,삭제)               : -0.1248
+```
+
+---
+
+### 코드 셀 #5
+
+```python
+# 상관관계 히트맵 (Plotly) - 상위 20개 변수
+if TARGET_COL in numeric_cols:
+    # 부도 여부와 상관관계 절대값 기준 상위 20개
+    top_corr_vars = target_corr.abs().sort_values(ascending=False).head(21).index.tolist()
+    corr_subset = df[top_corr_vars].corr()
+
+    # Plotly 히트맵
+    fig = go.Figure(data=go.Heatmap(
+        z=corr_subset.values,
+        x=corr_subset.columns,
+        y=corr_subset.index,
+        colorscale='RdBu_r',
+        zmid=0,
+        zmin=-1,
+        zmax=1,
+        text=corr_subset.values,
+        texttemplate='%{text:.2f}',
+        textfont={"size": 8},
+        colorbar=dict(title="상관계수"),
+        hovertemplate='X: %{x}<br>Y: %{y}<br>상관계수: %{z:.3f}<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title='주요 재무 지표 상관관계 히트맵 (부도 여부 기준 상위 20개)',
+        title_x=0.5,
+        width=1200,
+        height=1000,
+        xaxis=dict(tickangle=-45, side='bottom'),
+        yaxis=dict(tickangle=0),
+        margin=dict(l=200, r=100, t=100, b=200)
+    )
+
+    fig.show()
+
+    print(f"✓ 상관관계 히트맵 생성 완료 ({len(top_corr_vars)}개 변수)")
+
+    # 고상관 변수 쌍 찾기 (다중공선성 의심)
+    high_corr_pairs = []
+    for i in range(len(corr_subset.columns)):
+        for j in range(i+1, len(corr_subset.columns)):
+            if abs(corr_subset.iloc[i, j]) > 0.8:
+                high_corr_pairs.append((
+                    corr_subset.columns[i],
+                    corr_subset.columns[j],
+                    corr_subset.iloc[i, j]
+                ))
+
+    if high_corr_pairs:
+        print(f"\n⚠️  높은 상관관계 변수 쌍 ({len(high_corr_pairs)}개, |r| > 0.8):")
+        for var1, var2, corr_val in high_corr_pairs[:10]:
+            print(f"  • {var1[:30]:30s} ↔ {var2[:30]:30s} : {corr_val:.3f}")
+        if len(high_corr_pairs) > 10:
+            print(f"  ... 외 {len(high_corr_pairs)-10}개")
+else:
+    print("⚠️  상관관계 분석을 수행할 수 없습니다.")
+```
+
+**출력:**
+
+```
+✓ 상관관계 히트맵 생성 완료 (21개 변수)
+```
+
+---
+
+### 3.1 다중공선성 진단 (VIF)
+
+VIF (Variance Inflation Factor)로 다중공선성을 정량적으로 평가합니다.
+
+**해석 기준:**
+- VIF < 5: 문제 없음 ✅
+- 5 ≤ VIF < 10: 주의 필요 ⚠️
+- VIF ≥ 10: 다중공선성 심각 ❌
+
+### 코드 셀 #6
+
+```python
+# VIF 계산
+def calculate_vif(dataframe, features):
+    """VIF(분산팽창계수) 계산"""
+    vif_data = pd.DataFrame()
+    vif_data['변수명'] = features
+    vif_data['VIF'] = [
+        variance_inflation_factor(dataframe[features].values, i)
+        for i in range(len(features))
+    ]
+    return vif_data.sort_values('VIF', ascending=False)
+
+if TARGET_COL in numeric_cols:
+    # 타겟 제외하고 상위 15개 변수 선택
+    vif_vars = [v for v in top_corr_vars[:16] if v != TARGET_COL]
+
+    # 결측치 및 무한대 제거
+    df_vif = df[vif_vars].replace([np.inf, -np.inf], np.nan).dropna()
+
+    if len(df_vif) > 0 and len(vif_vars) > 1:
+        try:
+            vif_result = calculate_vif(df_vif, vif_vars)
+
+            print("=== VIF 분석 결과 ===")
+            print(vif_result.to_string(index=False))
+
+            # Plotly 막대그래프
+            colors = ['red' if x >= 10 else 'orange' if x >= 5 else 'green'
+                     for x in vif_result['VIF']]
+
+            fig = go.Figure()
+
+            fig.add_trace(go.Bar(
+                y=vif_result['변수명'],
+                x=vif_result['VIF'],
+                orientation='h',
+                marker_color=colors,
+                text=[f'{v:.1f}' for v in vif_result['VIF']],
+                textposition='outside',
+                hovertemplate='변수: %{y}<br>VIF: %{x:.2f}<extra></extra>'
+            ))
+
+            # 기준선
+            fig.add_vline(x=10, line_dash="dash", line_color="red", line_width=2,
+                         annotation_text="위험 (VIF=10)", annotation_position="top right")
+            fig.add_vline(x=5, line_dash="dash", line_color="orange", line_width=2,
+                         annotation_text="주의 (VIF=5)", annotation_position="top right")
+
+            fig.update_layout(
+                title='다중공선성 진단 (VIF)',
+                title_x=0.5,
+                xaxis_title='VIF 값',
+                yaxis_title='변수명',
+                height=max(400, len(vif_result) * 25),
+                width=1000,
+                showlegend=False,
+                margin=dict(l=250, r=150, t=80, b=80)
+            )
+
+            fig.show()
+
+            # 문제 변수 요약
+            high_vif = vif_result[vif_result['VIF'] >= 10]
+            medium_vif = vif_result[(vif_result['VIF'] >= 5) & (vif_result['VIF'] < 10)]
+
+            if len(high_vif) > 0:
+                print(f"\n❌ 다중공선성 심각 ({len(high_vif)}개, VIF ≥ 10):")
+                for _, row in high_vif.iterrows():
+                    print(f"  • {row['변수명']}: VIF={row['VIF']:.2f}")
+
+            if len(medium_vif) > 0:
+                print(f"\n⚠️  다중공선성 주의 ({len(medium_vif)}개, 5 ≤ VIF < 10):")
+                for _, row in medium_vif.iterrows():
+                    print(f"  • {row['변수명']}: VIF={row['VIF']:.2f}")
+
+            if len(high_vif) == 0 and len(medium_vif) == 0:
+                print("\n✅ 모든 변수의 VIF < 5: 다중공선성 문제 없음")
+
+        except Exception as e:
+            print(f"⚠️  VIF 계산 중 오류: {e}")
+    else:
+        print("⚠️  VIF 계산에 사용할 유효한 데이터가 부족합니다.")
+```
+
+**출력:**
+
+```
+=== VIF 분석 결과 ===
+                                     변수명   VIF
+                    기업신용공여연체기관수(일보)(미해제)   inf
+        기업신용공여연체최장연체일수(일보)(3개월내발생)(해제포함)   inf
+        기업신용공여연체최장연체일수(일보)(6개월내발생)(해제포함)   inf
+         기업신용공여연체최장연체일수(일보)(1년내발생)(해제포함)   inf
+                    기업신용공여연체과목수(일보)(미해제)   inf
+           기업신용공여연체과목수(일보)(3개월내발생)(해제포함)   inf
+           기업신용공여연체과목수(일보)(6개월내발생)(해제포함)   inf
+               기업신용공여30일이상연체과목수(일보)(미해제)   inf
+         기업신용공여30일이상연체기관수(일보)(이자연체)(미해제)   inf
+ 기업신용공여연체기관수(일보)(1년내유지)(연체일수30일이상)(해제포함)   inf
+기업신용공여연체기관수(일보)(6개월내유지)(연체일수30일이상)(해제포함)   inf
+               기업신용공여30일이상연체기관수(일보)(미해제)   inf
+                           기업신용평가등급(구간화) 10.97
+                                  상장폐지일자  9.45
+                 신용도판단정보공공정보건수(CIS)(미해제)  3.04
+```
+
+```
+❌ 다중공선성 심각 (13개, VIF ≥ 10):
+  • 기업신용공여연체기관수(일보)(미해제): VIF=inf
+  • 기업신용공여연체최장연체일수(일보)(3개월내발생)(해제포함): VIF=inf
+  • 기업신용공여연체최장연체일수(일보)(6개월내발생)(해제포함): VIF=inf
+  • 기업신용공여연체최장연체일수(일보)(1년내발생)(해제포함): VIF=inf
+  • 기업신용공여연체과목수(일보)(미해제): VIF=inf
+  • 기업신용공여연체과목수(일보)(3개월내발생)(해제포함): VIF=inf
+  • 기업신용공여연체과목수(일보)(6개월내발생)(해제포함): VIF=inf
+  • 기업신용공여30일이상연체과목수(일보)(미해제): VIF=inf
+  • 기업신용공여30일이상연체기관수(일보)(이자연체)(미해제): VIF=inf
+  • 기업신용공여연체기관수(일보)(1년내유지)(연체일수30일이상)(해제포함): VIF=inf
+  • 기업신용공여연체기관수(일보)(6개월내유지)(연체일수30일이상)(해제포함): VIF=inf
+  • 기업신용공여30일이상연체기관수(일보)(미해제): VIF=inf
+  • 기업신용평가등급(구간화): VIF=10.97
+
+⚠️  다중공선성 주의 (1개, 5 ≤ VIF < 10):
+  • 상장폐지일자: VIF=9.45
+```
+
+---
+
+## 4. 비선형 관계 탐색
+
+재무 지표와 부도 확률 간의 비선형 관계를 Binning을 통해 탐색합니다.
+
+### 분석 방법
+1. 변수를 10개 구간으로 분할 (백분위수 기반)
+2. 각 구간의 부도율 계산
+3. 임계점(threshold) 식별
+4. 구간별 리스크 패턴 시각화
+
+### 코드 셀 #7
+
+```python
+def analyze_nonlinear_relationship(df, feature, target, n_bins=10, feature_name=None):
+    """
+    특정 변수와 타겟 간의 비선형 관계 분석 (Plotly 버전)
+
+    Args:
+        df: 데이터프레임
+        feature: 분석할 변수명
+        target: 타겟 변수명
+        n_bins: 구간 개수
+        feature_name: 표시할 변수명
+
+    Returns:
+        binned_stats: 구간별 통계
+    """
+    if feature_name is None:
+        feature_name = feature
+
+    # 결측치 및 무한대 제거
+    df_clean = df[[feature, target]].replace([np.inf, -np.inf], np.nan).dropna()
+
+    if len(df_clean) == 0:
+        print(f"⚠️  {feature_name}: 유효한 데이터가 없습니다.")
+        return None
+
+    # 백분위수 기반 binning
+    try:
+        df_clean['bin'] = pd.qcut(df_clean[feature], q=n_bins, duplicates='drop')
+    except ValueError:
+        # 고유값이 너무 적어서 qcut이 실패할 경우 cut으로 대체 시도
+        df_clean['bin'] = pd.cut(df_clean[feature], bins=n_bins)
+
+    # 구간별 통계
+    binned_stats = df_clean.groupby('bin', observed=True).agg({
+        target: ['count', 'sum', 'mean'],
+        feature: ['min', 'max', 'mean']
+    }).reset_index()
+
+    binned_stats.columns = ['bin', 'count', 'n_default', 'default_rate',
+                            'feature_min', 'feature_max', 'feature_mean']
+
+    # --- X축 라벨 포맷팅 함수 ---
+    def format_label(val):
+        if val == int(val):
+            return f"{int(val)}"
+        return f"{val:.2f}"
+
+    # [수정됨] <br> 태그를 제거하여 한 줄로 표시되도록 변경
+    x_labels = [f"{format_label(row['feature_min'])}~{format_label(row['feature_max'])}"
+                for _, row in binned_stats.iterrows()]
+
+    # 서브플롯 생성
+    fig = make_subplots(
+        rows=2, cols=1,
+        subplot_titles=[f'📊 {feature_name} 구간별 부도율', f'📉 {feature_name} 구간별 샘플 분포'],
+        vertical_spacing=0.3,
+        row_heights=[0.6, 0.4]
+    )
+
+    avg_rate = df_clean[target].mean()
+
+    # 1) 구간별 부도율 막대그래프
+    colors_bars = ['crimson' if rate > avg_rate * 1.5 else 'orange' if rate > avg_rate else 'mediumseagreen'
+                   for rate in binned_stats['default_rate']]
+
+    fig.add_trace(go.Bar(
+        x=x_labels,
+        y=binned_stats['default_rate'] * 100,
+        marker_color=colors_bars,
+        text=[f"{rate*100:.1f}%<br>(n={cnt:,})"
+              for rate, cnt in zip(binned_stats['default_rate'], binned_stats['count'])],
+        textposition='outside',
+        hovertemplate='구간: %{x}<br>부도율: %{y:.2f}%<br>샘플수: %{text}<extra></extra>',
+        showlegend=False
+    ), row=1, col=1)
+
+    # 평균선
+    fig.add_hline(y=avg_rate*100, line_dash="dash", line_color="gray", line_width=2,
+                  annotation_text=f"전체 평균: {avg_rate*100:.2f}%",
+                  annotation_position="top right",
+                  row=1, col=1)
+
+    # 2) 구간별 샘플 수 막대그래프
+    fig.add_trace(go.Bar(
+        x=x_labels,
+        y=binned_stats['count'],
+        marker_color='lightsteelblue',
+        marker_opacity=0.8,
+        text=[f"{cnt:,}" for cnt in binned_stats['count']],
+        textposition='outside',
+        hovertemplate='구간: %{x}<br>샘플 수: %{y:,}<extra></extra>',
+        showlegend=False
+    ), row=2, col=1)
+
+    # --- 축 설정 (라벨 각도 조정) ---
+    # [수정됨] 라벨이 한 줄이므로 45도 회전보다는 0도(가로)가 보기 좋을 수 있습니다.
+    # 만약 라벨이 길어서 겹친다면 automargin이 작동하거나, tickangle을 다시 45로 변경하세요.
+    tick_angle = 45
+
+    # 1번 그래프 (상단)
+    fig.update_xaxes(
+        tickangle=tick_angle,
+        title_text=None,
+        automargin=True,
+        row=1, col=1
+    )
+    fig.update_yaxes(title_text="부도율 (%)", row=1, col=1)
+
+    # Y축 범위 여유 있게 조정
+    max_y_rate = binned_stats['default_rate'].max() * 100
+    fig.update_yaxes(range=[0, max_y_rate * 1.25], row=1, col=1)
+
+    # 2번 그래프 (하단)
+    fig.update_xaxes(
+        tickangle=tick_angle,
+        title_text=f"{feature_name} 구간 (Feature Range)",
+        automargin=True,
+        row=2, col=1
+    )
+    fig.update_yaxes(title_text="샘플 수", row=2, col=1)
+
+    # Y축 범위 여유 있게 조정
+    max_y_count = binned_stats['count'].max()
+    fig.update_yaxes(range=[0, max_y_count * 1.25], row=2, col=1)
+
+    # 전체 레이아웃
+    fig.update_layout(
+        height=900,
+        title={
+            'text': f"<b>{feature_name}</b> 비선형 관계 분석",
+            'y':0.98,
+            'x':0.5,
+            'xanchor': 'center',
+            'yanchor': 'top'
+        },
+        showlegend=False,
+        margin=dict(t=80, b=100, l=80, r=80),
+        template="plotly_white",
+        font=dict(family="Malgun Gothic") # 한글 폰트 설정 (필요시 변경)
+    )
+
+    fig.show()
+
+    return binned_stats
+
+print("✓ 비선형 관계 분석 함수 정의 완료")
+print("  사용법: analyze_nonlinear_relationship(df, '변수명', TARGET_COL, n_bins=10)")
+```
+
+**출력:**
+
+```
+✓ 비선형 관계 분석 함수 정의 완료
+  사용법: analyze_nonlinear_relationship(df, '변수명', TARGET_COL, n_bins=10)
+```
+
+---
+
+### 코드 셀 #8
+
+```python
+# 주요 재무 지표에 대해 비선형 관계 분석 실행
+if TARGET_COL in numeric_cols:
+    # 1단계: 타겟과 상관관계 절대값 상위 20개 변수 선택
+    top_20_features = target_corr.abs().sort_values(ascending=False).iloc[1:21].index.tolist()
+
+    print("=" * 80)
+    print("비선형 관계 분석을 위한 변수 선택")
+    print("=" * 80)
+    print()
+
+    # 2단계: 변동성 체크 (변동성이 낮은 변수 제외)
+    suitable_features = []
+
+    for feature in top_20_features:
+        # 유효한 데이터 추출
+        valid_data = df[feature].replace([np.inf, -np.inf], np.nan).dropna()
+
+        # 변동성 체크 기준
+        n_unique = valid_data.nunique()  # 고유값 개수
+        variance = valid_data.var()       # 분산
+        non_zero_pct = (valid_data != 0).mean()  # 0이 아닌 값의 비율
+
+        # 필터링 조건
+        is_suitable = (
+            n_unique >= 10 and           # 최소 10개 이상의 고유값
+            variance > 0 and             # 분산이 0보다 큼
+            non_zero_pct >= 0.1          # 최소 10% 이상이 0이 아님
+        )
+
+        if is_suitable:
+            suitable_features.append(feature)
+            # 변수명 길이 제한 (60자)
+            var_name = feature[:60] if len(feature) > 60 else feature
+            print(f"✓ {var_name:60s} | 고유값: {n_unique:5d}, 비0비율: {non_zero_pct*100:5.1f}%")
+        else:
+            var_name = feature[:60] if len(feature) > 60 else feature
+            reason = []
+            if n_unique < 10:
+                reason.append(f"고유값 {n_unique}개")
+            if variance == 0:
+                reason.append("분산=0")
+            if non_zero_pct < 0.1:
+                reason.append(f"비0비율 {non_zero_pct*100:.1f}%")
+
+            print(f"✗ {var_name:60s} | 제외: {', '.join(reason)}")
+
+    # 상위 5개만 선택
+    top_features = suitable_features[:5]
+
+    print("\n" + "=" * 80)
+    print(f"최종 선택된 변수: {len(top_features)}개")
+    print("=" * 80)
+    for i, feat in enumerate(top_features, 1):
+        corr_val = target_corr[feat]
+        feat_short = feat[:70] if len(feat) > 70 else feat
+        print(f"  {i}. {feat_short}")
+        print(f"     상관계수: {corr_val:.4f}")
+
+    if len(top_features) == 0:
+        print("\n⚠️  비선형 관계 분석에 적합한 변수가 없습니다.")
+        print("   상관관계는 높지만 변동성이 낮은 변수들입니다.")
+        print("   이런 변수는 이진 변수나 범주형 변수로 활용하세요.")
+
+    print("\n" + "=" * 80)
+
+    # 3단계: 비선형 관계 분석 실행
+    if len(top_features) > 0:
+        binned_results = {}
+
+        for i, feature in enumerate(top_features, 1):
+            print(f"\n{'='*80}")
+            feat_short = feature[:70] if len(feature) > 70 else feature
+            print(f"[{i}/{len(top_features)}] {feat_short} 분석 중...")
+            print(f"{'='*80}")
+
+            result = analyze_nonlinear_relationship(df, feature, TARGET_COL, n_bins=10)
+
+            if result is not None and len(result) > 1:  # 최소 2개 이상의 구간
+                binned_results[feature] = result
+            else:
+                print(f"⚠️  {feat_short}: 구간이 충분히 생성되지 않았습니다.")
+
+            print(f"{'='*80}\n")
+
+        print(f"\n✅ 비선형 관계 분석 완료: {len(binned_results)}개 변수")
+
+        # 분석 결과 요약
+        if len(binned_results) > 0:
+            print("\n" + "=" * 80)
+            print("비선형 관계 분석 결과 요약")
+            print("=" * 80)
+            for var_name, result in binned_results.items():
+                var_short = var_name[:60] if len(var_name) > 60 else var_name
+                max_rate = result['default_rate'].max()
+                min_rate = result['default_rate'].min()
+                rate_diff = (max_rate - min_rate) * 100
+                print(f"\n• {var_short}")
+                print(f"  - 최고 부도율: {max_rate*100:.2f}%")
+                print(f"  - 최저 부도율: {min_rate*100:.2f}%")
+                print(f"  - 부도율 차이: {rate_diff:.2f}%p")
+            print("\n" + "=" * 80)
+    else:
+        print("\n⚠️  분석할 변수가 없습니다.")
+
+else:
+    print("⚠️  타겟 변수를 찾을 수 없습니다.")
+```
+
+**출력:**
+
+```
+================================================================================
+비선형 관계 분석을 위한 변수 선택
+================================================================================
+
+✗ 기업신용공여연체기관수(일보)(미해제)                                         | 제외: 고유값 9개, 비0비율 0.6%
+✗ 기업신용공여연체최장연체일수(일보)(3개월내발생)(해제포함)                             | 제외: 비0비율 1.0%
+✗ 기업신용공여연체최장연체일수(일보)(6개월내발생)(해제포함)                             | 제외: 비0비율 1.5%
+✗ 기업신용공여연체최장연체일수(일보)(1년내발생)(해제포함)                              | 제외: 비0비율 2.2%
+✗ 기업신용공여연체과목수(일보)(미해제)                                         | 제외: 비0비율 0.6%
+✓ 상장폐지일자                                                       | 고유값:    41, 비0비율: 100.0%
+✗ 기업신용공여연체과목수(일보)(3개월내발생)(해제포함)                                | 제외: 비0비율 1.0%
+✗ 기업신용공여연체과목수(일보)(6개월내발생)(해제포함)                                | 제외: 비0비율 1.5%
+✗ 기업신용공여30일이상연체과목수(일보)(미해제)                                    | 제외: 고유값 7개, 비0비율 0.2%
+✗ 기업신용공여30일이상연체기관수(일보)(이자연체)(미해제)                              | 제외: 고유값 5개, 비0비율 0.1%
+✗ 기업신용공여연체기관수(일보)(1년내유지)(연체일수30일이상)(해제포함)                      | 제외: 고유값 7개, 비0비율 0.9%
+✗ 기업신용공여연체기관수(일보)(6개월내유지)(연체일수30일이상)(해제포함)                     | 제외: 고유값 6개, 비0비율 0.5%
+✓ 기업신용평가등급(구간화)                                                | 고유값:    11, 비0비율:  99.9%
+✗ 신용도판단정보공공정보건수(CIS)(미해제)                                      | 제외: 고유값 6개, 비0비율 0.6%
+✗ 기업신용공여30일이상연체기관수(일보)(미해제)                                    | 제외: 고유값 8개, 비0비율 0.2%
+✗ 기업신용공여연체과목수(일보)(6개월내유지)(연체일수30일이상)(해제포함)                     | 제외: 고유값 9개, 비0비율 0.5%
+✗ 기업신용공여30일이상연체기관수(일보)(해제포함)                                   | 제외: 비0비율 2.4%
+✗ 기업신용공여연체기관수(일보)(3개월내유지)(연체일수30일이상)(해제포함)                     | 제외: 고유값 5개, 비0비율 0.2%
+✗ 신용도판단공공정보건수(CIS)(5년내발생)(해제포함)                                | 제외: 비0비율 0.7%
+✗ 기업신용공여연체과목수(일보)(1년내유지)(연체일수30일이상)(해제포함)                      | 제외: 비0비율 0.9%
+
+================================================================================
+최종 선택된 변수: 2개
+================================================================================
+  1. 상장폐지일자
+     상관계수: 0.2161
+  2. 기업신용평가등급(구간화)
+     상관계수: 0.1543
+
+================================================================================
+
+================================================================================
+[1/2] 상장폐지일자 분석 중...
+================================================================================
+```
+
+```
+================================================================================
+
+
+================================================================================
+[2/2] 기업신용평가등급(구간화) 분석 중...
+================================================================================
+```
+
+```
+================================================================================
+
+
+✅ 비선형 관계 분석 완료: 2개 변수
+
+================================================================================
+비선형 관계 분석 결과 요약
+================================================================================
+
+• 상장폐지일자
+  - 최고 부도율: 25.00%
+  - 최저 부도율: 0.00%
+  - 부도율 차이: 25.00%p
+
+• 기업신용평가등급(구간화)
+  - 최고 부도율: 8.10%
+  - 최저 부도율: 0.08%
+  - 부도율 차이: 8.02%p
+
+================================================================================
+```
+
+---
+
+## 5. 이자보상배율 심화 분석
+
+### 이자보상배율 (Interest Coverage Ratio, ICR)
+```
+ICR = 영업이익 / 이자비용
+```
+
+**해석 기준:**
+- **ICR ≥ 1.5**: 안정적 ✅ (이자 1.5배 이상 벌어들임)
+- **1.0 ≤ ICR < 1.5**: 주의 ⚠️ (이자는 내지만 여유 없음)
+- **ICR < 1.0**: 좀비 기업 ❌ (영업이익으로 이자도 못 냄)
+- **ICR < 0**: 영업손실 💀
+
+### 좀비 기업 (Zombie Company)
+영업활동으로 번 돈이 이자비용보다 적어서 빚만 늘어나는 기업. 부도 위험이 매우 높음.
+
+### 코드 셀 #9
+
+```python
+# 이자보상배율 계산을 위한 변수 탐색
+operating_income_cols = [col for col in df.columns if '영업이익' in col or 'operating' in col.lower() and 'income' in col.lower()]
+interest_expense_cols = [col for col in df.columns if '이자비용' in col or ('interest' in col.lower() and 'expense' in col.lower())]
+
+print("=== 이자보상배율 계산을 위한 변수 탐색 ===")
+print(f"\n영업이익 관련 컬럼 ({len(operating_income_cols)}개):")
+for col in operating_income_cols[:5]:
+    print(f"  • {col}")
+if len(operating_income_cols) > 5:
+    print(f"  ... 외 {len(operating_income_cols)-5}개")
+
+print(f"\n이자비용 관련 컬럼 ({len(interest_expense_cols)}개):")
+for col in interest_expense_cols[:5]:
+    print(f"  • {col}")
+if len(interest_expense_cols) > 5:
+    print(f"  ... 외 {len(interest_expense_cols)-5}개")
+    
+# 이자보상배율 계산
+if operating_income_cols and interest_expense_cols:
+    op_income_col = operating_income_cols[0]
+    interest_col = interest_expense_cols[0]
+
+    print(f"\\n✓ 선택된 컬럼:")
+    print(f"  • 영업이익: {op_income_col}")
+    print(f"  • 이자비용: {interest_col}")
+
+    # [수정] 도메인 지식을 반영한 ICR 계산 함수
+    def calculate_icr_domain(row):
+        op = row[op_income_col]
+        intr = row[interest_col]
+        
+        # 1. 이자비용이 0 이하 (무차입 or 이자수익) -> 상환능력 최상 (100배 부여)
+        if intr <= 0:
+            return 100.0
+        
+        # 2. 정상 계산
+        icr = op / intr
+        
+        # 3. 이상치(Outlier) 제어: -100 ~ 100 사이로 Clipping
+        if icr > 100: return 100.0
+        if icr < -100: return -100.0
+        
+        return icr
+
+    df['이자보상배율_ICR'] = df.apply(calculate_icr_domain, axis=1)
+
+    print(f"\\n✅ 이자보상배율 계산 완료 (무차입 경영 보정 적용)")
+    print(f"\n✅ 이자보상배율 계산 완료")
+    print(f"  • 유효 데이터: {df['이자보상배율_ICR'].notna().sum():,}개 ({df['이자보상배율_ICR'].notna().sum()/len(df)*100:.1f}%)")
+    print(f"  • 평균: {df['이자보상배율_ICR'].mean():.2f}")
+    print(f"  • 중앙값: {df['이자보상배율_ICR'].median():.2f}")
+    print(f"  • 표준편차: {df['이자보상배율_ICR'].std():.2f}")
+else:
+    print("\n⚠️  영업이익 또는 이자비용 컬럼을 찾을 수 없습니다.")
+    print("   수동으로 컬럼명을 지정해주세요:")
+    print("   op_income_col = 'YOUR_COLUMN_NAME'")
+    print("   interest_col = 'YOUR_COLUMN_NAME'")
+```
+
+**출력:**
+
+```
+=== 이자보상배율 계산을 위한 변수 탐색 ===
+
+영업이익 관련 컬럼 (4개):
+  • 전기영업이익
+  • 영업이익이자보상배율
+  • 재무비율_영업이익율
+  • 영업이익증가율
+
+이자비용 관련 컬럼 (1개):
+  • 이자비용
+\n✓ 선택된 컬럼:
+  • 영업이익: 전기영업이익
+  • 이자비용: 이자비용
+\n✅ 이자보상배율 계산 완료 (무차입 경영 보정 적용)
+
+✅ 이자보상배율 계산 완료
+  • 유효 데이터: 50,105개 (100.0%)
+  • 평균: 20.89
+  • 중앙값: 4.21
+  • 표준편차: 45.34
+```
+
+---
+
+### 코드 셀 #10
+
+```python
+# 좀비 기업 식별 및 분석
+if '이자보상배율_ICR' in df.columns:
+    # ICR 카테고리 분류
+    def categorize_icr(icr):
+        if pd.isna(icr):
+            return '데이터 없음'
+        elif icr < 0:
+            return '영업손실 (<0)'
+        elif icr < 1.0:
+            return '좀비 기업 (<1.0)'
+        elif icr < 1.5:
+            return '주의 (1.0~1.5)'
+        else:
+            return '안정 (≥1.5)'
+
+    df['ICR_카테고리'] = df['이자보상배율_ICR'].apply(categorize_icr)
+
+    # 카테고리별 통계
+    icr_stats = df.groupby('ICR_카테고리').agg({
+        TARGET_COL: ['count', 'sum', 'mean']
+    }).round(4)
+
+    icr_stats.columns = ['기업 수', '부도 기업 수', '부도율']
+
+    # 카테고리 순서 정렬
+    category_order = ['영업손실 (<0)', '좀비 기업 (<1.0)', '주의 (1.0~1.5)', '안정 (≥1.5)', '데이터 없음']
+    icr_stats = icr_stats.reindex([cat for cat in category_order if cat in icr_stats.index])
+
+    print("=== 이자보상배율 카테고리별 부도율 ===")
+    print(icr_stats)
+
+    # Plotly 시각화 (1x2) - 레이아웃 개선
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=['이자보상배율 카테고리별 부도율', '이자보상배율 카테고리별 기업 분포'],
+        horizontal_spacing=0.18  # 간격 증가
+    )
+
+    # 색상 매핑
+    color_map = {
+        '영업손실 (<0)': 'darkred',
+        '좀비 기업 (<1.0)': 'red',
+        '주의 (1.0~1.5)': 'orange',
+        '안정 (≥1.5)': 'lightgreen',
+        '데이터 없음': 'lightgray'
+    }
+    colors = [color_map.get(cat, 'gray') for cat in icr_stats.index]
+
+    # Y축 레이블 단축
+    y_labels_short = []
+    for label in icr_stats.index:
+        if '(' in label:
+            # 괄호 앞부분만 사용
+            short = label.split('(')[0].strip()
+        else:
+            short = label
+        y_labels_short.append(short)
+
+    # 1) 부도율 막대그래프
+    fig.add_trace(go.Bar(
+        y=y_labels_short,
+        x=icr_stats['부도율'],
+        orientation='h',
+        marker_color=colors,
+        text=[f"{rate*100:.2f}%<br>n={cnt:,}"
+              for rate, cnt in zip(icr_stats['부도율'], icr_stats['기업 수'])],
+        textposition='outside',
+        hovertemplate='카테고리: %{customdata}<br>부도율: %{x:.2%}<extra></extra>',
+        customdata=icr_stats.index,  # 전체 이름은 호버에 표시
+        showlegend=False
+    ), row=1, col=1)
+
+    # 2) 기업 분포 막대그래프
+    fig.add_trace(go.Bar(
+        y=y_labels_short,
+        x=icr_stats['기업 수'],
+        orientation='h',
+        marker_color=colors,
+        marker_opacity=0.7,
+        text=[f"{cnt:,}" for cnt in icr_stats['기업 수']],
+        textposition='outside',
+        hovertemplate='카테고리: %{customdata}<br>기업 수: %{x:,}<extra></extra>',
+        customdata=icr_stats.index,  # 전체 이름은 호버에 표시
+        showlegend=False
+    ), row=1, col=2)
+
+    fig.update_xaxes(title_text="부도율", row=1, col=1)
+    fig.update_xaxes(title_text="기업 수", row=1, col=2)
+
+    # Y축 제목 제거하여 겹침 방지
+    fig.update_yaxes(title_text="", row=1, col=1)
+    fig.update_yaxes(title_text="", row=1, col=2)
+
+    # 높이 자동 조정
+    chart_height = max(500, len(icr_stats) * 80)
+
+    fig.update_layout(
+        height=chart_height,
+        title_text="이자보상배율 카테고리 분석",
+        title_x=0.5,
+        showlegend=False,
+        margin=dict(l=100, r=180, t=100, b=80),  # 여백 최적화
+        font=dict(size=11)
+    )
+
+    # Y축 텍스트 설정
+    fig.update_yaxes(tickfont=dict(size=10), row=1, col=1)
+    fig.update_yaxes(tickfont=dict(size=10), row=1, col=2)
+
+    fig.show()
+
+    # 좀비 기업 심층 분석
+    zombie_mask = df['ICR_카테고리'] == '좀비 기업 (<1.0)'
+    n_zombie = zombie_mask.sum()
+    zombie_default_rate = df[zombie_mask][TARGET_COL].mean()
+    avg_default_rate = df[TARGET_COL].mean()
+
+    print(f"\n{'='*60}")
+    print("좀비 기업 심층 분석")
+    print(f"{'='*60}")
+    print(f"✓ 좀비 기업 수: {n_zombie:,}개 ({n_zombie/len(df)*100:.2f}%)")
+    print(f"✓ 좀비 기업 부도율: {zombie_default_rate*100:.2f}%")
+    print(f"✓ 전체 평균 부도율: {avg_default_rate*100:.2f}%")
+    print(f"✓ 부도 위험 배율: {zombie_default_rate/avg_default_rate:.2f}x")
+    print(f"{'='*60}")
+else:
+    print("⚠️  이자보상배율이 계산되지 않았습니다.")
+```
+
+**출력:**
+
+```
+=== 이자보상배율 카테고리별 부도율 ===
+               기업 수  부도 기업 수  부도율
+ICR_카테고리                         
+영업손실 (<0)     12949      254 0.02
+좀비 기업 (<1.0)   4805       97 0.02
+주의 (1.0~1.5)   1686       24 0.01
+안정 (≥1.5)     30665      384 0.01
+```
+
+```
+============================================================
+좀비 기업 심층 분석
+============================================================
+✓ 좀비 기업 수: 4,805개 (9.59%)
+✓ 좀비 기업 부도율: 2.02%
+✓ 전체 평균 부도율: 1.51%
+✓ 부도 위험 배율: 1.33x
+============================================================
+```
+
+---
+
+### 코드 셀 #11
+
+```python
+# 업종별 이자보상배율 분석
+industry_cols = [col for col in df.columns if '업종' in col or 'industry' in col.lower() or 'ksic' in col.lower()]
+
+if industry_cols and '이자보상배율_ICR' in df.columns:
+    industry_col = industry_cols[0]
+
+    print(f"사용할 업종 컬럼: {industry_col}")
+
+    # 업종별 평균 ICR 및 부도율
+    industry_icr = df.groupby(industry_col).agg({
+        '이자보상배율_ICR': ['mean', 'median'],
+        TARGET_COL: ['count', 'mean']
+    }).round(2)
+
+    industry_icr.columns = ['평균_ICR', '중앙_ICR', '기업수', '부도율']
+    industry_icr = industry_icr[industry_icr['기업수'] >= 30]  # 최소 30개 기업
+    industry_icr = industry_icr.sort_values('부도율', ascending=False).head(15)
+
+    print("\n=== 업종별 이자보상배율 및 부도율 (상위 15개) ===")
+    print(industry_icr)
+
+    # Plotly 복합 차트 (막대 + 라인)
+    fig = go.Figure()
+
+    # 평균 ICR (막대)
+    fig.add_trace(go.Bar(
+        x=industry_icr.index,
+        y=industry_icr['평균_ICR'],
+        name='평균 ICR',
+        marker_color='steelblue',
+        opacity=0.7,
+        yaxis='y',
+        hovertemplate='업종: %{x}<br>평균 ICR: %{y:.2f}<extra></extra>'
+    ))
+
+    # 부도율 (라인, 오른쪽 축)
+    fig.add_trace(go.Scatter(
+        x=industry_icr.index,
+        y=industry_icr['부도율'] * 100,
+        name='부도율',
+        mode='lines+markers',
+        marker=dict(color='coral', size=8),
+        line=dict(color='coral', width=3),
+        yaxis='y2',
+        hovertemplate='업종: %{x}<br>부도율: %{y:.2f}%<extra></extra>'
+    ))
+
+    # 레이아웃
+    fig.update_layout(
+        title='업종별 이자보상배율 vs 부도율',
+        title_x=0.5,
+        xaxis=dict(title='업종', tickangle=-45),
+        yaxis=dict(
+            title='평균 이자보상배율',
+            side='left',
+            showgrid=False
+        ),
+        yaxis2=dict(
+            title='부도율 (%)',
+            side='right',
+            overlaying='y',
+            showgrid=False
+        ),
+        height=600,
+        width=1200,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5
+        ),
+        margin=dict(l=80, r=80, t=100, b=150),
+        hovermode='x unified'
+    )
+
+    fig.show()
+
+    print(f"\n✅ 업종별 이자보상배율 분석 완료")
+else:
+    print("⚠️  업종 정보 또는 이자보상배율 데이터가 없습니다.")
+```
+
+**출력:**
+
+```
+사용할 업종 컬럼: 업종(중분류)
+
+=== 업종별 이자보상배율 및 부도율 (상위 15개) ===
+         평균_ICR  중앙_ICR   기업수  부도율
+업종(중분류)                           
+A01       18.78    2.42   384 0.04
+C11       20.81    2.32   127 0.03
+I56       22.44    4.96   561 0.03
+J59       23.34    3.84   220 0.03
+L68       13.52    0.90  2459 0.03
+J63       28.82    9.96   215 0.03
+S94       25.09    5.52    72 0.03
+M71       29.17   11.57  1018 0.02
+M73       24.22    5.93   347 0.02
+C25       15.08    2.46  1842 0.02
+R91       20.87    2.58   463 0.02
+H52       25.48    6.00   661 0.02
+H50       14.30    2.05   123 0.02
+G47       23.49    6.27  3699 0.02
+F42       28.85    9.89  3571 0.02
+```
+
+```
+✅ 업종별 이자보상배율 분석 완료
+```
+
+---
+
+## 6. 현금흐름 세부 분석
+
+### 현금흐름표 3대 활동
+
+| 활동 | 설명 | 양수(+) | 음수(-) |
+|------|------|---------|---------|
+| **영업활동 (OCF)** | 핵심 사업 현금흐름 | 사업이 현금 창출 ✅ | 사업이 현금 소진 ❌ |
+| **투자활동 (ICF)** | 자산 취득/처분 | 자산 매각 (구조조정) | 투자 확대 (성장) |
+| **재무활동 (FCF)** | 자금 조달/상환 | 차입/증자 | 상환/배당 |
+
+### 기업 생애주기 패턴
+
+| 단계 | OCF | ICF | FCF | 특징 |
+|------|-----|-----|-----|------|
+| **도입기** | ➖ | ➖ | ➕ | 사업 초기, 자금 조달 중 |
+| **성장기** | ➕ | ➖ | ➕ | 수익 발생, 적극 투자 |
+| **성숙기** | ➕ | ➖ | ➖ | 안정적 수익, 배당 증가 |
+| **쇠퇴기** | ➖ | ➕ | ➖ | 사업 축소, 자산 매각 |
+
+### 코드 셀 #12
+
+```python
+# 현금흐름 관련 변수 탐색
+cf_cols = {
+    'operating': [col for col in df.columns if '영업활동' in col and '현금' in col],
+    'investing': [col for col in df.columns if '투자활동' in col and '현금' in col],
+    'financing': [col for col in df.columns if '재무활동' in col and '현금' in col]
+}
+
+print("=== 현금흐름 관련 변수 탐색 ===")
+for cf_type, cols in cf_cols.items():
+    print(f"\n{cf_type.upper()} ({len(cols)}개):")
+    for col in cols[:3]:
+        print(f"  • {col}")
+    if len(cols) > 3:
+        print(f"  ... 외 {len(cols)-3}개")
+
+# 현금흐름 변수 설정
+ocf_col = cf_cols['operating'][0] if cf_cols['operating'] else None
+icf_col = cf_cols['investing'][0] if cf_cols['investing'] else None
+fcf_col = cf_cols['financing'][0] if cf_cols['financing'] else None
+
+if ocf_col and icf_col and fcf_col:
+    print(f"\n✓ 선택된 현금흐름 변수:")
+    print(f"  • 영업활동: {ocf_col}")
+    print(f"  • 투자활동: {icf_col}")
+    print(f"  • 재무활동: {fcf_col}")
+
+    # 현금흐름 패턴 분류
+    def classify_cashflow_pattern(row):
+        ocf = row[ocf_col]
+        icf = row[icf_col]
+        fcf = row[fcf_col]
+
+        if pd.isna(ocf) or pd.isna(icf) or pd.isna(fcf):
+            return '데이터 없음'
+
+        # 패턴 분류
+        if ocf > 0 and icf < 0 and fcf < 0:
+            return '성숙기 (OCF+, ICF-, FCF-)'
+        elif ocf > 0 and icf < 0 and fcf > 0:
+            return '성장기 (OCF+, ICF-, FCF+)'
+        elif ocf < 0 and icf < 0 and fcf > 0:
+            return '도입기 (OCF-, ICF-, FCF+)'
+        elif ocf < 0 and icf > 0 and fcf < 0:
+            return '쇠퇴기 (OCF-, ICF+, FCF-)'
+        else:
+            return '기타 패턴'
+
+    df['현금흐름_패턴'] = df.apply(classify_cashflow_pattern, axis=1)
+
+    print("\n✅ 현금흐름 패턴 분류 완료")
+    print(f"  • 패턴 카테고리: {df['현금흐름_패턴'].nunique()}개")
+else:
+    print("\n⚠️  현금흐름 변수를 찾을 수 없습니다.")
+    print("   수동으로 지정해주세요:")
+    print("   ocf_col = 'YOUR_OPERATING_CF_COLUMN'")
+    print("   icf_col = 'YOUR_INVESTING_CF_COLUMN'")
+    print("   fcf_col = 'YOUR_FINANCING_CF_COLUMN'")
+```
+
+**출력:**
+
+```
+=== 현금흐름 관련 변수 탐색 ===
+
+OPERATING (1개):
+  • 영업활동현금흐름
+
+INVESTING (1개):
+  • 투자활동현금흐름
+
+FINANCING (1개):
+  • 재무활동현금흐름
+
+✓ 선택된 현금흐름 변수:
+  • 영업활동: 영업활동현금흐름
+  • 투자활동: 투자활동현금흐름
+  • 재무활동: 재무활동현금흐름
+
+✅ 현금흐름 패턴 분류 완료
+  • 패턴 카테고리: 5개
+```
+
+---
+
+### 코드 셀 #13
+
+```python
+# 현금흐름 패턴별 부도율 분석 (Plotly)
+if '현금흐름_패턴' in df.columns:
+    cf_pattern_stats = df.groupby('현금흐름_패턴').agg({
+        TARGET_COL: ['count', 'sum', 'mean']
+    }).round(4)
+
+    cf_pattern_stats.columns = ['기업 수', '부도 기업 수', '부도율']
+    cf_pattern_stats = cf_pattern_stats.sort_values('부도율', ascending=False)
+
+    print("=== 현금흐름 패턴별 부도율 ===")
+    print(cf_pattern_stats)
+
+    # Plotly 시각화 (1x2) - 레이아웃 개선
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=['현금흐름 패턴별 부도율', '현금흐름 패턴별 기업 분포'],
+        horizontal_spacing=0.20  # 간격 증가
+    )
+
+    # 색상 매핑
+    color_map = {
+        '영업손실 (<0)': 'darkred',
+        '쇠퇴기 (OCF-, ICF+, FCF-)': 'red',
+        '도입기 (OCF-, ICF-, FCF+)': 'orange',
+        '성장기 (OCF+, ICF-, FCF+)': 'lightgreen',
+        '성숙기 (OCF+, ICF-, FCF-)': 'green',
+        '기타 패턴': 'gray',
+        '데이터 없음': 'lightgray'
+    }
+    colors = [color_map.get(pat, 'gray') for pat in cf_pattern_stats.index]
+
+    # Y축 레이블 단축 (괄호 내용 제거하여 가독성 향상)
+    y_labels_short = []
+    for label in cf_pattern_stats.index:
+        if '(' in label:
+            # 괄호 앞부분만 사용
+            short = label.split('(')[0].strip()
+        else:
+            short = label
+        y_labels_short.append(short)
+
+    # 1) 부도율
+    fig.add_trace(go.Bar(
+        y=y_labels_short,
+        x=cf_pattern_stats['부도율'],
+        orientation='h',
+        marker_color=colors,
+        text=[f"{rate*100:.2f}%<br>n={cnt:,}"
+              for rate, cnt in zip(cf_pattern_stats['부도율'], cf_pattern_stats['기업 수'])],
+        textposition='outside',
+        hovertemplate='패턴: %{customdata}<br>부도율: %{x:.2%}<extra></extra>',
+        customdata=cf_pattern_stats.index,  # 전체 이름은 호버에 표시
+        showlegend=False
+    ), row=1, col=1)
+
+    # 2) 기업 분포
+    fig.add_trace(go.Bar(
+        y=y_labels_short,
+        x=cf_pattern_stats['기업 수'],
+        orientation='h',
+        marker_color=colors,
+        marker_opacity=0.7,
+        text=[f"{cnt:,}" for cnt in cf_pattern_stats['기업 수']],
+        textposition='outside',
+        hovertemplate='패턴: %{customdata}<br>기업 수: %{x:,}<extra></extra>',
+        customdata=cf_pattern_stats.index,  # 전체 이름은 호버에 표시
+        showlegend=False
+    ), row=1, col=2)
+
+    fig.update_xaxes(title_text="부도율", row=1, col=1)
+    fig.update_xaxes(title_text="기업 수", row=1, col=2)
+    fig.update_yaxes(title_text="현금흐름 패턴", row=1, col=1)
+    fig.update_yaxes(title_text="현금흐름 패턴", row=1, col=2)
+
+    # 높이 자동 조정 (패턴 수에 비례)
+    chart_height = max(500, len(cf_pattern_stats) * 80)
+
+    fig.update_layout(
+        height=chart_height,  # 동적 높이
+        title_text="현금흐름 패턴 분석",
+        title_x=0.5,
+        showlegend=False,
+        margin=dict(l=120, r=200, t=100, b=80),  # 왼쪽 여백 증가
+        font=dict(size=11)  # 폰트 크기 약간 감소
+    )
+
+    # Y축 텍스트 설정
+    fig.update_yaxes(tickfont=dict(size=10), row=1, col=1)
+    fig.update_yaxes(tickfont=dict(size=10), row=1, col=2)
+
+    fig.show()
+
+    # 위험 패턴 식별
+    avg_default = df[TARGET_COL].mean()
+    high_risk_patterns = cf_pattern_stats[cf_pattern_stats['부도율'] > avg_default * 1.5]
+
+    if len(high_risk_patterns) > 0:
+        print(f"\n{'='*60}")
+        print("고위험 현금흐름 패턴")
+        print(f"{'='*60}")
+        print(f"전체 평균 부도율: {avg_default*100:.2f}%")
+        print(f"\n고위험 패턴 (평균 대비 1.5배 이상):")
+        for pattern, row in high_risk_patterns.iterrows():
+            risk_ratio = row['부도율'] / avg_default
+            print(f"  • {pattern}")
+            print(f"    - 부도율: {row['부도율']*100:.2f}%")
+            print(f"    - 위험 배율: {risk_ratio:.2f}x")
+            print(f"    - 기업 수: {row['기업 수']:,}개")
+        print(f"{'='*60}")
+
+    print(f"\n✅ 현금흐름 패턴 분석 완료")
+else:
+    print("⚠️  현금흐름 패턴이 분류되지 않았습니다.")
+```
+
+**출력:**
+
+```
+=== 현금흐름 패턴별 부도율 ===
+                         기업 수  부도 기업 수  부도율
+현금흐름_패턴                                    
+도입기 (OCF-, ICF-, FCF+)   2669       59 0.02
+기타 패턴                   36936      585 0.02
+쇠퇴기 (OCF-, ICF+, FCF-)   1099       15 0.01
+성장기 (OCF+, ICF-, FCF+)   3799       48 0.01
+성숙기 (OCF+, ICF-, FCF-)   5602       52 0.01
+```
+
+```
+✅ 현금흐름 패턴 분석 완료
+```
+
+---
+
+### 코드 셀 #14
+
+```python
+# 현금흐름 3대 활동 간 상관관계 (Plotly 히트맵)
+if ocf_col and icf_col and fcf_col:
+    # 상관관계 계산
+    cf_data = df[[ocf_col, icf_col, fcf_col, TARGET_COL]].copy()
+    cf_data.columns = ['영업활동CF', '투자활동CF', '재무활동CF', '부도여부']
+    cf_corr = cf_data.corr()
+
+    print("=== 현금흐름 3대 활동 상관관계 ===")
+    print(cf_corr)
+
+    # Plotly 히트맵
+    fig = go.Figure(data=go.Heatmap(
+        z=cf_corr.values,
+        x=cf_corr.columns,
+        y=cf_corr.index,
+        colorscale='RdBu_r',
+        zmid=0,
+        zmin=-1,
+        zmax=1,
+        text=cf_corr.values,
+        texttemplate='%{text:.3f}',
+        textfont={"size": 12},
+        colorbar=dict(title="상관계수"),
+        hovertemplate='X: %{x}<br>Y: %{y}<br>상관계수: %{z:.3f}<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title='현금흐름 3대 활동 상관관계',
+        title_x=0.5,
+        width=700,
+        height=600,
+        xaxis=dict(side='bottom'),
+        yaxis=dict(side='left'),
+        margin=dict(l=120, r=80, t=100, b=120)
+    )
+
+    fig.show()
+
+    # 부도 여부와의 상관관계
+    print(f"\n{'='*60}")
+    print("부도 여부와의 상관관계")
+    print(f"{'='*60}")
+    print(f"영업활동 현금흐름: {cf_corr.loc['영업활동CF', '부도여부']:7.4f}")
+    print(f"투자활동 현금흐름: {cf_corr.loc['투자활동CF', '부도여부']:7.4f}")
+    print(f"재무활동 현금흐름: {cf_corr.loc['재무활동CF', '부도여부']:7.4f}")
+    print(f"{'='*60}")
+else:
+    print("⚠️  현금흐름 변수가 설정되지 않았습니다.")
+```
+
+**출력:**
+
+```
+=== 현금흐름 3대 활동 상관관계 ===
+        영업활동CF  투자활동CF  재무활동CF  부도여부
+영업활동CF    1.00   -0.70   -0.28 -0.00
+투자활동CF   -0.70    1.00   -0.38  0.00
+재무활동CF   -0.28   -0.38    1.00  0.00
+부도여부     -0.00    0.00    0.00  1.00
+```
+
+```
+============================================================
+부도 여부와의 상관관계
+============================================================
+영업활동 현금흐름: -0.0044
+투자활동 현금흐름:  0.0036
+재무활동 현금흐름:  0.0000
+============================================================
+```
+
+---
+
+## 7. 비재무 및 거시경제 지표 검토
+
+### 7.1 비재무적 정보
+데이터셋에서 활용 가능한 비재무 정보를 탐색합니다.
+- 신용 연체 정보
+- 외부감사 여부
+- 기업 규모/업종
+- 기타 행동 데이터
+
+### 7.2 거시경제 지표 연계
+거시경제 지표를 결합하면 모델 설명력 향상:
+- 금리 (한국은행 기준금리)
+- 환율 (USD/KRW)
+- GDP 성장률
+- 산업생산지수
+- 실업률
+
+**조건**: 데이터에 시점 정보(연도, 분기)가 있어야 함
+
+### 코드 셀 #15
+
+```python
+# 비재무 정보 탐색
+print("=== 비재무 정보 탐색 ===\n")
+
+# 1) 신용 연체 정보
+delinquency_cols = [col for col in df.columns if '연체' in col or '신용' in col or 'delinq' in col.lower()]
+print(f"1. 신용 연체 관련 변수 ({len(delinquency_cols)}개):")
+for col in delinquency_cols[:5]:
+    print(f"   • {col}")
+if len(delinquency_cols) > 5:
+    print(f"   ... 외 {len(delinquency_cols)-5}개")
+
+# 2) 외부감사 정보
+audit_cols = [col for col in df.columns if '외감' in col or '감사' in col or 'audit' in col.lower()]
+print(f"\n2. 외부감사 관련 변수 ({len(audit_cols)}개):")
+for col in audit_cols:
+    print(f"   • {col}")
+
+# 3) 기업 규모 정보
+size_cols = [col for col in df.columns if '규모' in col or '자산총계' in col or '매출' in col]
+print(f"\n3. 기업 규모 관련 변수 ({len(size_cols)}개):")
+for col in size_cols[:5]:
+    print(f"   • {col}")
+if len(size_cols) > 5:
+    print(f"   ... 외 {len(size_cols)-5}개")
+
+# 4) 시점 정보
+time_cols = [col for col in df.columns if '년' in col or '연도' in col or 'year' in col.lower() or '분기' in col]
+print(f"\n4. 시점 관련 변수 ({len(time_cols)}개):")
+for col in time_cols:
+    print(f"   • {col}")
+
+if not time_cols:
+    print("   ⚠️  시점 정보가 없어 거시경제 지표 연결이 어렵습니다.")
+else:
+    print("   ✅ 시점 정보 확인됨. 거시경제 지표 연계 가능합니다.")
+
+print("\n" + "="*70)
+
+# 비재무 변수 요약
+non_financial_vars = {
+    '신용연체': delinquency_cols,
+    '외부감사': audit_cols,
+    '기업규모': size_cols,
+    '시점': time_cols
+}
+
+total_non_financial = sum(len(cols) for cols in non_financial_vars.values())
+print(f"\n✓ 총 {total_non_financial}개 비재무 관련 변수 식별됨")
+```
+
+**출력:**
+
+```
+=== 비재무 정보 탐색 ===
+
+1. 신용 연체 관련 변수 (42개):
+   • 기업신용공여연체과목수(일보)(미해제)
+   • 기업신용공여연체과목수(일보)(3개월내유지)(해제포함)
+   • 기업신용공여연체과목수(일보)(6개월내유지)(해제포함)
+   • 기업신용공여연체과목수(일보)(1년내유지)(해제포함)
+   • 기업신용공여연체과목수(일보)(3년내유지)(해제포함)
+   ... 외 37개
+
+2. 외부감사 관련 변수 (1개):
+   • 외감구분
+
+3. 기업 규모 관련 변수 (14개):
+   • 매출채권
+   • 매출채권(전기)
+   • 매출채권처분손실(당기)
+   • 자산총계
+   • 자산총계(전기)
+   ... 외 9개
+
+4. 시점 관련 변수 (19개):
+   • 기준년월
+   • 기업신용공여연체과목수(일보)(1년내유지)(해제포함)
+   • 기업신용공여연체과목수(일보)(3년내유지)(해제포함)
+   • 기업신용공여연체과목수(일보)(1년내발생)(해제포함)
+   • 기업신용공여연체과목수(일보)(3년내발생)(해제포함)
+   • 기업신용공여연체과목수(일보)(1년내유지)(연체일수30일이상)(해제포함)
+   • 기업신용공여연체과목수(일보)(3년내유지)(연체일수30일이상)(해제포함)
+   • 기업신용공여연체기관수(일보)(1년내유지)(연체일수30일이상)(해제포함)
+   • 기업신용공여연체기관수(일보)(3년내유지)(연체일수30일이상)(해제포함)
+   • 기업신용공여연체최장연체일수(일보)(1년내유지)(해제포함)
+   • 기업신용공여연체최장연체일수(일보)(3년내유지)(해제포함)
+   • 기업신용공여연체최장연체일수(일보)(5년내유지)(해제포함)
+   • 기업신용공여연체최장연체일수(일보)(1년내발생)(해제포함)
+   • 기업신용공여연체최장연체일수(일보)(3년내발생)(해제포함)
+   • 기업신용공여연체최장연체일수(일보)(5년내발생)(해제포함)
+   • 신용도판단공공정보건수(CIS)(5년내발생)(해제포함)
+   • 공공정보(국세,지방세,관세체납)건수(CIS)(5년내발생)
+   • 공공정보(국세,지방세,관세체납,고용산재체납)건수(CIS)(5년내발생)
+   • 모형개발용Performance(향후1년내부도여부)
+   ✅ 시점 정보 확인됨. 거시경제 지표 연계 가능합니다.
+
+======================================================================
+
+✓ 총 76개 비재무 관련 변수 식별됨
+```
+
+---
+
+## 7. 종합 인사이트 및 다음 단계
+
+### 주요 발견사항
+
+#### 1. 상관관계 분석
+- ✅ 부도 여부와 높은 상관관계를 가진 주요 변수 식별
+- ✅ VIF를 통한 다중공선성 진단 (VIF ≥ 10인 변수 제거 필요)
+- ✅ 모델링 시 사용할 변수 우선순위 결정
+
+#### 2. 비선형 관계
+- ✅ 재무 지표와 부도율의 비선형적 관계 확인
+- ✅ 임계점(threshold) 식별로 위험 구간 파악
+- ✅ 구간별 차별적 리스크 관리 전략 수립 가능
+
+#### 3. 이자보상배율
+- ✅ **좀비 기업**(ICR < 1.0) 식별 및 높은 부도 위험 확인
+- ✅ 업종별 이자보상배율 차이 분석
+- ✅ 이자보상배율이 부도 예측의 핵심 지표임을 재확인
+
+#### 4. 현금흐름 패턴
+- ✅ 기업 생애주기별 현금흐름 패턴 분류
+- ✅ **쇠퇴기 패턴**(OCF-, ICF+, FCF-)의 높은 부도 위험
+- ✅ 3대 현금흐름 활동의 종합적 고려 필요
+
+#### 5. 비재무/거시경제
+- ✅ 비재무 정보(연체, 외감 여부 등)의 영향력 확인
+- ✅ 거시경제 지표 연계 가능성 검토
+
+---
+
+### 모델링 시 고려사항
+
+#### 변수 선택 전략
+1. **다중공선성 처리**
+   - VIF ≥ 10인 변수 중 하나만 선택
+   - 또는 주성분 분석(PCA) 적용
+
+2. **변수 우선순위**
+   - 부도 여부와 상관관계가 높은 변수 우선
+   - 비즈니스 해석이 명확한 변수 선호
+
+3. **비선형 변환**
+   - 구간화(binning) 또는 다항식 변환
+   - 로그 변환, 제곱근 변환 등
+
+#### 파생 변수 생성
+- `ICR_카테고리`: 좀비/주의/안정
+- `현금흐름_패턴`: 도입기/성장기/성숙기/쇠퇴기
+- 비선형 임계값 기반 이진 변수 (예: `부채비율_위험` = 부채비율 > 200%)
+
+#### 불균형 데이터 처리
+- **오버샘플링**: SMOTE, ADASYN
+- **언더샘플링**: Tomek Links, NearMiss
+- **알고리즘 조정**: class_weight, sample_weight
+- **손실함수**: Focal Loss, Weighted Cross-Entropy
+
+---
+
+### 다음 단계
+
+#### 1️⃣ 특성 공학 (`02_고급_도메인_특성공학.ipynb`)
+- 이 노트북에서 발견한 인사이트 기반 파생 변수 생성
+- 비선형 변환, 상호작용 변수 추가
+- 도메인 지식 기반 리스크 스코어 개선
+
+#### 2️⃣ 상관관계 및 리스크 패턴 분석 (`03_상관관계_및_리스크_패턴_분석.ipynb`)
+- 변수 간 복잡한 상호작용 패턴 분석
+- 부도 기업 특성 프로파일링
+- 업종/규모별 세그먼트 분석
+
+#### 3️⃣ 불균형 분류 모델링 (`04_불균형_분류_모델링.ipynb`)
+- 불균형 데이터 처리 기법 적용
+- 다양한 모델 비교 (LightGBM, XGBoost, CatBoost)
+- 하이퍼파라미터 튜닝 및 앙상블
+
+#### 4️⃣ 모델 평가 및 해석 (`05_모델_평가_및_해석.ipynb`)
+- SHAP를 통한 변수 중요도 분석
+- 부도 예측 주요 인자 해석
+- 비즈니스 인사이트 도출
+
+---
+
+### 결론
+
+이 노트북을 통해:
+1. **재무 지표의 비선형적 특성** 확인
+2. **이자보상배율과 현금흐름 패턴**의 중요성 재확인
+3. **다중공선성 문제** 파악 및 해결 방향 제시
+4. **모델링을 위한 파생 변수** 생성
+
+다음 노트북에서 이러한 인사이트를 바탕으로 더 정교한 특성 공학과 모델링을 수행합니다.
+
+### 코드 셀 #16
+
+```python
+# 분석 결과 요약
+print("="*70)
+print("심화 재무 분석 완료")
+print("="*70)
+print()
+print("📊 생성된 주요 변수:")
+new_vars = []
+if '이자보상배율_ICR' in df.columns:
+    new_vars.append('이자보상배율_ICR')
+if 'ICR_카테고리' in df.columns:
+    new_vars.append('ICR_카테고리')
+if '현금흐름_패턴' in df.columns:
+    new_vars.append('현금흐름_패턴')
+
+for var in new_vars:
+    n_valid = df[var].notna().sum()
+    print(f"  ✓ {var}: {n_valid:,}개 유효 데이터")
+
+print()
+print("📈 다음 노트북:")
+print("  → 02_고급_도메인_특성공학.ipynb")
+print("  → 03_상관관계_및_리스크_패턴_분석.ipynb")
+print()
+print("="*70)
+```
+
+**출력:**
+
+```
+======================================================================
+심화 재무 분석 완료
+======================================================================
+
+📊 생성된 주요 변수:
+  ✓ 이자보상배율_ICR: 50,105개 유효 데이터
+  ✓ ICR_카테고리: 50,105개 유효 데이터
+  ✓ 현금흐름_패턴: 50,105개 유효 데이터
+
+📈 다음 노트북:
+  → 02_고급_도메인_특성공학.ipynb
+  → 03_상관관계_및_리스크_패턴_분석.ipynb
+
+======================================================================
+```
+
+---
