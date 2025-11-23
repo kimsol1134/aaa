@@ -1,0 +1,32 @@
+[
+  {
+    "week": "week1",
+    "experiment": "exp1_kfold_cv",
+    "status": "❌ 실패",
+    "script": "week1_diagnosis/exp1_kfold_cv.py"
+  },
+  {
+    "week": "week1",
+    "experiment": "exp2_distribution_comparison",
+    "status": "❌ 실패",
+    "script": "week1_diagnosis/exp2_distribution_comparison.py"
+  },
+  {
+    "week": "week1",
+    "experiment": "exp3_smote_ablation",
+    "status": "❌ 실패",
+    "script": "week1_diagnosis/exp3_smote_ablation.py"
+  },
+  {
+    "week": "week2",
+    "experiment": "exp1_credit_rating_transformation",
+    "status": "❌ 실패",
+    "script": "week2_feature_engineering/exp1_credit_rating_transformation.py"
+  },
+  {
+    "week": "week2",
+    "experiment": "exp2_vif_based_removal",
+    "status": "❌ 실패",
+    "script": "week2_feature_engineering/exp2_vif_based_removal.py"
+  }
+]
