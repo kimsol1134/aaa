@@ -38,10 +38,12 @@ plt.rc('axes', unicode_minus=False)
 
 @st.cache_resource
 def load_predictor():
-    """모델 로딩 (캐시)"""
+    """모델 로딩 (캐시) - Part3 파이프라인 우선 사용"""
     predictor = BankruptcyPredictor(
-        model_path=MODEL_PATH,
-        scaler_path=SCALER_PATH
+        pipeline_path=PIPELINE_PATH,  # Part3 전체 파이프라인
+        model_path=MODEL_PATH,        # 레거시 모델 (fallback)
+        scaler_path=SCALER_PATH,      # 레거시 스케일러 (fallback)
+        use_pipeline=True             # 파이프라인 우선 사용
     )
     predictor.load_model()
     return predictor
