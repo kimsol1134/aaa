@@ -139,6 +139,57 @@ def create_shap_waterfall(
     return fig
 
 
+def create_shap_waterfall_real(
+    shap_values: np.ndarray,
+    feature_values: pd.Series,
+    feature_names: List[str],
+    base_value: float,
+    max_display: int = 10
+) -> go.Figure:
+    """
+    실제 SHAP 값 기반 Waterfall 차트
+
+    Args:
+        shap_values: SHAP 값 배열
+        feature_values: 특성값 Series
+        feature_names: 특성명 리스트
+        base_value: 기준값 (expected_value)
+        max_display: 표시할 최대 특성 개수
+
+    Returns:
+        Plotly Figure
+    """
+    # 절대값 기준 상위 N개 선택
+    abs_shap = np.abs(shap_values)
+    top_indices = np.argsort(abs_shap)[-max_display:][::-1]
+
+    top_features = [feature_names[i] for i in top_indices]
+    top_shap_values = [shap_values[i] for i in top_indices]
+
+    # Waterfall 차트 생성
+    fig = go.Figure(go.Waterfall(
+        name="SHAP 기여도",
+        orientation="v",
+        measure=["absolute"] + ["relative"] * max_display + ["total"],
+        x=["기준값"] + top_features + ["최종 예측"],
+        y=[base_value] + top_shap_values + [sum(shap_values)],
+        connector={"line": {"color": "rgb(63, 63, 63)"}},
+        decreasing={"marker": {"color": "#51CF66"}},  # 초록 (위험 감소)
+        increasing={"marker": {"color": "#FF6B6B"}},  # 빨강 (위험 증가)
+        totals={"marker": {"color": "#4DABF7"}}       # 파랑 (최종값)
+    ))
+
+    fig.update_layout(
+        title="SHAP 기여도 분석 (Waterfall)",
+        showlegend=False,
+        height=500,
+        font={'family': 'sans-serif'},
+        yaxis_title="부도 확률 기여도"
+    )
+
+    return fig
+
+
 def create_radar_chart(
     company_features: pd.DataFrame,
     industry_avg: Optional[Dict] = None

@@ -10,7 +10,7 @@ import numpy as np
 
 def get_risk_level(risk_score: float) -> Tuple[str, str, str]:
     """
-    위험도 점수를 등급으로 변환
+    위험도 점수를 등급으로 변환 (Part 3 최적 임계값 사용)
 
     Args:
         risk_score: 부도 확률 (0~1)
@@ -18,14 +18,12 @@ def get_risk_level(risk_score: float) -> Tuple[str, str, str]:
     Returns:
         (등급명, 이모지, 설명)
     """
-    if risk_score < 0.1:
+    if risk_score < 0.0168:  # < 1.68%
         return ("안전", "🟢", "부도 위험이 매우 낮습니다")
-    elif risk_score < 0.3:
-        return ("주의", "🟡", "일부 위험 요소가 있습니다")
-    elif risk_score < 0.6:
-        return ("경고", "🟠", "부도 위험이 높습니다")
-    else:
-        return ("위험", "🔴", "부도 위험이 매우 높습니다")
+    elif risk_score < 0.0468:  # < 4.68%
+        return ("주의", "🟡", "잠재적 위험 요소가 있습니다")
+    else:  # >= 4.68%
+        return ("고위험", "🔴", "부도 위험이 높습니다")
 
 
 def format_korean_number(number: float, unit: str = "원") -> str:
