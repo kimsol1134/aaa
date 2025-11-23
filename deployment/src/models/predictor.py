@@ -13,15 +13,28 @@ from typing import Dict, Optional
 import logging
 import sys
 
-# 전처리 모듈 import
+# 전처리 모듈 import (pickle 로딩을 위해 클래스들 import 필요)
 try:
-    from src.preprocessing.transformers import create_preprocessing_pipeline
+    from src.preprocessing.transformers import (
+        create_preprocessing_pipeline,
+        InfiniteHandler,
+        LogTransformer,
+        Winsorizer
+    )
 except ImportError:
     # deployment 폴더에서 실행될 경우
     try:
-        from preprocessing.transformers import create_preprocessing_pipeline
+        from preprocessing.transformers import (
+            create_preprocessing_pipeline,
+            InfiniteHandler,
+            LogTransformer,
+            Winsorizer
+        )
     except ImportError:
         create_preprocessing_pipeline = None
+        InfiniteHandler = None
+        LogTransformer = None
+        Winsorizer = None
         logging.warning("전처리 모듈을 import할 수 없습니다. 기본 전처리 사용")
 
 logger = logging.getLogger(__name__)
