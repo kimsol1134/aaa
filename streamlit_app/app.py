@@ -251,19 +251,46 @@ def run_analysis(financial_data: dict, company_info: dict):
     st.markdown("---")
     st.header(f"📊 분석 결과: {company_info.get('corp_name', '기업')}")
 
-    # 1. 특성 생성
-    with st.spinner("도메인 특성 생성 중..."):
-        generator = DomainFeatureGenerator()
-        features_df = generator.generate_all_features(financial_data)
+    # 프로그레스 바 초기화
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
-    st.success(f"✓ {len(features_df.columns)}개 특성 생성 완료")
+    # 1. 특성 생성 (0% → 40%)
+    status_text.text("🔄 1/3 단계: 도메인 특성 생성 중...")
+    progress_bar.progress(10)
 
-    # 2. 예측
-    with st.spinner("부도 위험 예측 중..."):
-        predictor = load_predictor()
-        result = predictor.predict(features_df)
+    generator = DomainFeatureGenerator()
+    features_df = generator.generate_all_features(financial_data)
+    progress_bar.progress(40)
+    status_text.text(f"✓ 특성 생성 완료 ({len(features_df.columns)}개)")
 
-    st.success("✓ 예측 완료")
+    # 2. 예측 (40% → 70%)
+    status_text.text("🔄 2/3 단계: 부도 위험 예측 중...")
+    progress_bar.progress(50)
+
+    predictor = load_predictor()
+    result = predictor.predict(features_df)
+    progress_bar.progress(70)
+    status_text.text("✓ 예측 완료")
+
+    # 3. 분석 준비 (70% → 100%)
+    status_text.text("🔄 3/3 단계: 분석 결과 준비 중...")
+    progress_bar.progress(85)
+
+    # 잠시 대기 (UX 개선)
+    import time
+    time.sleep(0.3)
+
+    progress_bar.progress(100)
+    status_text.text("✅ 모든 분석 완료!")
+
+    # 프로그레스 바 제거
+    time.sleep(0.5)
+    progress_bar.empty()
+    status_text.empty()
+
+    # 완료 메시지
+    st.success(f"✓ 분석 완료: {len(features_df.columns)}개 특성 생성, 부도 확률 {result['bankruptcy_probability']*100:.2f}%")
 
     # ========== 섹션 1: 종합 평가 ==========
     display_overall_assessment(result, features_df, financial_data)
@@ -288,44 +315,76 @@ def display_overall_assessment(result: dict, features_df: pd.DataFrame, financia
     """섹션 1: 종합 평가"""
     st.markdown("## 🎯 종합 부도 위험 평가")
 
+    risk_prob = result['bankruptcy_probability']
+
+    # 대형 Traffic Light 인디케이터
+    if risk_prob < 0.0168:  # 안전 (< 1.68%)
+        light_color = "#4caf50"  # 초록
+        light_icon = "🟢"
+        light_label = "안전"
+        light_desc = f"부도 확률 {risk_prob*100:.2f}% (기준: < 1.68%)"
+    elif risk_prob < 0.0468:  # 주의 (1.68% ~ 4.68%)
+        light_color = "#ffeb3b"  # 노랑
+        light_icon = "🟡"
+        light_label = "주의"
+        light_desc = f"부도 확률 {risk_prob*100:.2f}% (기준: 1.68% ~ 4.68%)"
+    else:  # 위험 (> 4.68%)
+        light_color = "#f44336"  # 빨강
+        light_icon = "🔴"
+        light_label = "위험"
+        light_desc = f"부도 확률 {risk_prob*100:.2f}% (기준: > 4.68%)"
+
+    # 대형 신호등 HTML
+    st.markdown(f"""
+    <div style="text-align: center; padding: 30px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 15px; margin-bottom: 20px;">
+        <div style="font-size: 100px; margin-bottom: 10px;">{light_icon}</div>
+        <h1 style="color: white; margin: 10px 0; font-size: 48px;">{light_label}</h1>
+        <p style="color: white; font-size: 20px; margin: 5px 0;">{light_desc}</p>
+        <p style="color: rgba(255,255,255,0.9); font-size: 16px; margin-top: 15px;">{result['risk_message']}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 핵심 지표 (4개 컬럼)
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        risk_prob = result['bankruptcy_probability']
         st.metric(
             label="부도 확률",
-            value=f"{risk_prob*100:.1f}%",
-            delta=f"{result['risk_level']} {result['risk_icon']}"
+            value=f"{risk_prob*100:.2f}%",
+            delta=f"{result['risk_level']}"
         )
 
     with col2:
-        st.metric(
-            label="위험 등급",
-            value=result['risk_level'],
-            delta=result['risk_icon']
-        )
-
-    with col3:
         건전성지수 = features_df.get('재무건전성지수', pd.Series([50])).iloc[0]
+        delta_건전성 = "양호" if 건전성지수 >= 60 else "취약"
         st.metric(
             label="재무 건전성",
             value=f"{건전성지수:.0f}점",
-            delta="100점 만점"
+            delta=delta_건전성
         )
 
-    with col4:
+    with col3:
         경보신호수 = int(features_df.get('조기경보신호수', pd.Series([0])).iloc[0])
+        delta_경보 = "정상" if 경보신호수 == 0 else f"{경보신호수}개 감지"
         st.metric(
             label="조기경보신호",
             value=f"{경보신호수}개",
-            delta="위험신호 개수"
+            delta=delta_경보,
+            delta_color="inverse" if 경보신호수 > 0 else "normal"
+        )
+
+    with col4:
+        종합위험스코어 = features_df.get('종합부도위험스코어', pd.Series([50])).iloc[0]
+        delta_위험 = "낮음" if 종합위험스코어 < 30 else ("보통" if 종합위험스코어 < 60 else "높음")
+        st.metric(
+            label="종합위험스코어",
+            value=f"{종합위험스코어:.0f}점",
+            delta=delta_위험,
+            delta_color="inverse" if 종합위험스코어 >= 60 else "normal"
         )
 
     # 게이지 차트
     st.plotly_chart(create_risk_gauge(risk_prob), use_container_width=True)
-
-    # 메시지
-    st.info(f"**분석 결과:** {result['risk_message']}")
 
 
 def display_risk_analysis(result: dict, features_df: pd.DataFrame):
@@ -333,39 +392,67 @@ def display_risk_analysis(result: dict, features_df: pd.DataFrame):
     st.markdown("---")
     st.markdown("## 🔍 위험 요인 상세 분석")
 
-    col1, col2 = st.columns(2)
+    critical_risks = identify_critical_risks(features_df)
+    warnings = identify_warnings(features_df)
 
-    with col1:
-        st.markdown("### 🔴 Critical 리스크 (즉시 조치 필요)")
+    # Critical 리스크 (상단 전체 너비로 강조)
+    st.markdown("### 🚨 Critical 리스크 (즉시 조치 필요)")
 
-        critical_risks = identify_critical_risks(features_df)
+    if critical_risks:
+        for risk in critical_risks:
+            st.markdown(f"""
+            <div style="background: #ffebee; border-left: 5px solid #f44336; padding: 20px; margin: 15px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                    <span style="font-size: 24px; margin-right: 10px;">🚨</span>
+                    <h4 style="color: #c62828; margin: 0; font-size: 20px;">{risk['name']}</h4>
+                </div>
+                <div style="margin: 10px 0; padding: 10px; background: white; border-radius: 5px;">
+                    <p style="margin: 5px 0; font-size: 16px;"><strong>현재값:</strong> <span style="color: #f44336; font-size: 18px; font-weight: bold;">{risk['value']:.2f}</span></p>
+                    <p style="margin: 5px 0; font-size: 16px;"><strong>위험 기준:</strong> {risk['threshold']:.2f}</p>
+                </div>
+                <p style="color: #555; font-size: 15px; margin: 10px 0; line-height: 1.5;">💡 {risk['explanation']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background: #e8f5e9; border-left: 5px solid #4caf50; padding: 15px; margin: 15px 0; border-radius: 8px;">
+            <p style="color: #2e7d32; font-size: 16px; margin: 0;">✅ Critical 리스크가 발견되지 않았습니다.</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-        if critical_risks:
-            for risk in critical_risks:
-                st.error(
-                    f"**{risk['name']}**: {risk['value']:.2f} "
-                    f"(기준: {risk['threshold']:.2f})\n\n"
-                    f"→ {risk['explanation']}"
-                )
-        else:
-            st.success("✓ Critical 리스크 없음")
+    # Warning (2 컬럼 그리드)
+    st.markdown("### ⚠️ Warning (개선 권장)")
 
-    with col2:
-        st.markdown("### 🟡 Warning (개선 권장)")
-
-        warnings = identify_warnings(features_df)
-
-        if warnings:
-            for warning in warnings:
-                st.warning(
-                    f"**{warning['name']}**: {warning['value']:.2f} "
-                    f"(권장: {warning['threshold']:.2f})"
-                )
-        else:
-            st.success("✓ Warning 없음")
+    if warnings:
+        # 2개씩 묶어서 표시
+        for i in range(0, len(warnings), 2):
+            cols = st.columns(2)
+            for j, col in enumerate(cols):
+                if i + j < len(warnings):
+                    warning = warnings[i + j]
+                    with col:
+                        st.markdown(f"""
+                        <div style="background: #fffde7; border-left: 4px solid #ffeb3b; padding: 15px; margin: 10px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                            <div style="display: flex; align-items: center; margin-bottom: 8px;">
+                                <span style="font-size: 20px; margin-right: 8px;">⚠️</span>
+                                <h5 style="color: #f57f17; margin: 0; font-size: 16px;">{warning['name']}</h5>
+                            </div>
+                            <p style="margin: 5px 0; font-size: 14px;"><strong>현재:</strong> <span style="color: #f57f17;">{warning['value']:.2f}</span></p>
+                            <p style="margin: 5px 0; font-size: 14px;"><strong>권장:</strong> {warning['threshold']:.2f}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 15px 0; border-radius: 8px;">
+            <p style="color: #2e7d32; font-size: 16px; margin: 0;">✅ 모든 지표가 권장 범위 내에 있습니다.</p>
+        </div>
+        """, unsafe_allow_html=True)
 
     # SHAP Waterfall 차트
+    st.markdown("---")
     st.markdown("### 📊 주요 위험 요인 기여도 (SHAP 분석)")
+    st.caption("각 특성이 부도 확률에 미치는 영향을 분석합니다. 빨간색은 위험 증가, 파란색은 위험 감소를 의미합니다.")
+
     if result.get('shap_values'):
         # 실제 SHAP 값 사용
         fig_shap = create_shap_waterfall_real(
@@ -375,6 +462,15 @@ def display_risk_analysis(result: dict, features_df: pd.DataFrame):
             base_value=result['shap_base_value']
         )
         st.plotly_chart(fig_shap, use_container_width=True)
+
+        # 범례 추가
+        st.markdown("""
+        <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin-top: 10px;">
+            <p style="margin: 5px 0;"><span style="color: #f44336;">■</span> <strong>빨간색:</strong> 부도 위험을 증가시키는 요인</p>
+            <p style="margin: 5px 0;"><span style="color: #2196F3;">■</span> <strong>파란색:</strong> 부도 위험을 감소시키는 요인 (보호 요인)</p>
+            <p style="margin: 5px 0;"><strong>Base Value:</strong> 모든 기업의 평균 부도 확률</p>
+        </div>
+        """, unsafe_allow_html=True)
     else:
         # SHAP 값 없으면 간소화 버전 사용
         fig_shap = create_shap_waterfall(features_df.iloc[0])
@@ -387,49 +483,137 @@ def display_business_value(result: dict):
     st.markdown("---")
     st.markdown("## 💰 비즈니스 가치 분석")
 
-    calc = BusinessValueCalculator()
+    # 인터랙티브 파라미터 조정
+    st.markdown("### 🎛️ 대출 조건 설정")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        avg_loan = st.slider(
+            "평균 대출 금액 (백만원)",
+            min_value=1,
+            max_value=100,
+            value=5,
+            step=1,
+            help="기업당 평균 대출 금액을 설정하세요"
+        ) * 1_000_000
+
+    with col2:
+        avg_interest = st.slider(
+            "평균 이자 수익 (백만원)",
+            min_value=0.1,
+            max_value=10.0,
+            value=0.5,
+            step=0.1,
+            help="대출 건당 예상 이자 수익을 설정하세요"
+        ) * 1_000_000
+
+    # 실시간 계산
+    calc = BusinessValueCalculator(avg_loan=avg_loan, avg_interest=avg_interest)
     value = calc.calculate_single_company(result['bankruptcy_probability'])
+
+    # 결과 표시
+    st.markdown("### 📈 예상 수익/손실")
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.metric("예상 손실", f"{value['expected_loss']:,.0f}원")
+        st.metric(
+            "예상 손실",
+            f"{value['expected_loss']:,.0f}원",
+            delta=f"부도 확률 {result['bankruptcy_probability']*100:.2f}%",
+            delta_color="inverse"
+        )
 
     with col2:
-        st.metric("예상 수익", f"{value['expected_profit']:,.0f}원")
+        st.metric(
+            "예상 수익",
+            f"{value['expected_profit']:,.0f}원",
+            delta=f"정상 확률 {(1-result['bankruptcy_probability'])*100:.2f}%",
+            delta_color="normal"
+        )
 
     with col3:
         delta_color = "normal" if value['net'] > 0 else "inverse"
         st.metric(
             "순 기대값",
             f"{value['net']:,.0f}원",
-            delta="긍정적" if value['net'] > 0 else "부정적"
+            delta="대출 승인 권장" if value['net'] > 0 else "대출 거절 권장",
+            delta_color=delta_color
         )
 
+    # 의사결정 권장사항
+    if value['net'] > 0:
+        st.success(f"✅ **의사결정:** 대출 승인 권장 (순 기대값: {value['net']:,.0f}원 > 0)")
+    else:
+        st.error(f"❌ **의사결정:** 대출 거절 권장 (순 기대값: {value['net']:,.0f}원 < 0)")
+
     # 모델 성능 통계
-    st.markdown("### 📊 모델 성능 (Test Set)")
+    st.markdown("---")
+    st.markdown("### 📊 모델 성능 (Test Set 기준)")
     perf = calc.get_model_performance_stats()
 
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("ROI", perf['roi'])
+        st.metric("ROI", perf['roi'], delta="투자 대비 수익률")
 
     with col2:
-        st.metric("Payback", f"{perf['payback_months']}개월")
+        st.metric("Payback Period", f"{perf['payback_months']}개월", delta="투자 회수 기간")
 
     with col3:
-        st.metric("연간 절감", perf['annual_savings_krw'])
+        st.metric("연간 절감액", perf['annual_savings_krw'], delta="비용 절감")
 
     with col4:
-        st.metric("F2-Score", f"{perf['f2_score']:.2f}")
+        st.metric("F2-Score", f"{perf['f2_score']:.2f}", delta="모델 정확도")
 
-    st.info("""
-    **💡 해석:**
-    - **ROI 920%**: 모델 도입으로 투자 대비 9배 이상의 수익 창출
-    - **Payback 1.3개월**: 모델 투자 비용을 1.3개월 내 회수
-    - **연간 절감 460M KRW**: 잘못된 대출 결정 방지로 연간 4.6억원 절감
-    """)
+    # 해석 가이드
+    with st.expander("💡 비즈니스 가치 해석 가이드"):
+        st.markdown("""
+        #### ROI (Return on Investment)
+        - **920%**: 모델 도입 투자 대비 9배 이상의 수익 창출
+        - 부도 기업을 사전에 감지하여 손실 방지
+
+        #### Payback Period
+        - **1.3개월**: 모델 투자 비용을 1.3개월 내 회수
+        - 매우 빠른 투자 회수로 비즈니스 리스크 최소화
+
+        #### 연간 절감액
+        - **460M KRW**: 잘못된 대출 결정 방지로 연간 4.6억원 절감
+        - Type II Error (부도 미탐지) 감소 효과
+
+        #### F2-Score
+        - 재현율(Recall)을 중시하는 평가 지표
+        - 부도 기업을 놓치지 않는 것이 중요하므로 F2 사용
+        """)
+
+    # 시나리오 분석
+    st.markdown("---")
+    st.markdown("### 🔮 시나리오 분석")
+
+    scenario_col1, scenario_col2 = st.columns(2)
+
+    with scenario_col1:
+        st.markdown("""
+        <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 4px solid #2196F3;">
+            <h5 style="color: #1976d2; margin-top: 0;">✅ 승인 시 (Approve)</h5>
+            <p><strong>정상 기업일 경우:</strong></p>
+            <p style="margin-left: 20px;">→ 이자 수익: {avg_interest:,.0f}원</p>
+            <p><strong>부도 기업일 경우:</strong></p>
+            <p style="margin-left: 20px;">→ 손실: {avg_loan:,.0f}원</p>
+        </div>
+        """.format(avg_interest=avg_interest, avg_loan=avg_loan), unsafe_allow_html=True)
+
+    with scenario_col2:
+        st.markdown("""
+        <div style="background: #fce4ec; padding: 15px; border-radius: 8px; border-left: 4px solid #e91e63;">
+            <h5 style="color: #c2185b; margin-top: 0;">❌ 거절 시 (Reject)</h5>
+            <p><strong>정상 기업일 경우:</strong></p>
+            <p style="margin-left: 20px;">→ 기회 손실: 이자 수익 포기</p>
+            <p><strong>부도 기업일 경우:</strong></p>
+            <p style="margin-left: 20px;">→ 손실 방지: 대출금 회수 불능 방지</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 
 def display_recommendations(features_df: pd.DataFrame, financial_data: dict):
