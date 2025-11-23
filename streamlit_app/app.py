@@ -17,11 +17,13 @@ from config import *
 from src.dart_api import DartAPIClient, FinancialStatementParser
 from src.domain_features import DomainFeatureGenerator
 from src.models import BankruptcyPredictor
-from src.visualization.charts import create_risk_gauge, create_shap_waterfall, create_radar_chart
+from src.visualization.charts import create_risk_gauge, create_shap_waterfall, create_shap_waterfall_real, create_radar_chart
 from src.utils.helpers import (
     get_risk_level, format_korean_number,
     identify_critical_risks, identify_warnings, generate_recommendations
 )
+from src.utils.business_value import BusinessValueCalculator
+import numpy as np
 
 # 페이지 설정
 st.set_page_config(**PAGE_CONFIG)
@@ -269,13 +271,16 @@ def run_analysis(financial_data: dict, company_info: dict):
     # ========== 섹션 2: 위험 요인 분석 ==========
     display_risk_analysis(result, features_df)
 
-    # ========== 섹션 3: 개선 권장사항 ==========
+    # ========== 섹션 3: 비즈니스 가치 분석 ==========
+    display_business_value(result)
+
+    # ========== 섹션 4: 개선 권장사항 ==========
     display_recommendations(features_df, financial_data)
 
-    # ========== 섹션 4: 상세 특성 ==========
+    # ========== 섹션 5: 상세 특성 ==========
     display_detailed_features(features_df)
 
-    # ========== 섹션 5: 재무제표 원본 ==========
+    # ========== 섹션 6: 재무제표 원본 ==========
     display_financial_statements(financial_data)
 
 
@@ -359,14 +364,76 @@ def display_risk_analysis(result: dict, features_df: pd.DataFrame):
         else:
             st.success("✓ Warning 없음")
 
-    # SHAP-style Waterfall 차트
-    st.markdown("### 📊 주요 위험 요인 기여도")
-    fig_shap = create_shap_waterfall(features_df.iloc[0])
-    st.plotly_chart(fig_shap, use_container_width=True)
+    # SHAP Waterfall 차트
+    st.markdown("### 📊 주요 위험 요인 기여도 (SHAP 분석)")
+    if result.get('shap_values'):
+        # 실제 SHAP 값 사용
+        fig_shap = create_shap_waterfall_real(
+            shap_values=np.array(result['shap_values']),
+            feature_values=features_df.iloc[0],
+            feature_names=result['feature_names'],
+            base_value=result['shap_base_value']
+        )
+        st.plotly_chart(fig_shap, use_container_width=True)
+    else:
+        # SHAP 값 없으면 간소화 버전 사용
+        fig_shap = create_shap_waterfall(features_df.iloc[0])
+        st.plotly_chart(fig_shap, use_container_width=True)
+        st.info("ℹ️ 모델 로드 실패로 간소화된 분석을 표시합니다.")
+
+
+def display_business_value(result: dict):
+    """섹션 3: 비즈니스 가치 분석"""
+    st.markdown("---")
+    st.markdown("## 💰 비즈니스 가치 분석")
+
+    calc = BusinessValueCalculator()
+    value = calc.calculate_single_company(result['bankruptcy_probability'])
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("예상 손실", f"{value['expected_loss']:,.0f}원")
+
+    with col2:
+        st.metric("예상 수익", f"{value['expected_profit']:,.0f}원")
+
+    with col3:
+        delta_color = "normal" if value['net'] > 0 else "inverse"
+        st.metric(
+            "순 기대값",
+            f"{value['net']:,.0f}원",
+            delta="긍정적" if value['net'] > 0 else "부정적"
+        )
+
+    # 모델 성능 통계
+    st.markdown("### 📊 모델 성능 (Test Set)")
+    perf = calc.get_model_performance_stats()
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("ROI", perf['roi'])
+
+    with col2:
+        st.metric("Payback", f"{perf['payback_months']}개월")
+
+    with col3:
+        st.metric("연간 절감", perf['annual_savings_krw'])
+
+    with col4:
+        st.metric("F2-Score", f"{perf['f2_score']:.2f}")
+
+    st.info("""
+    **💡 해석:**
+    - **ROI 920%**: 모델 도입으로 투자 대비 9배 이상의 수익 창출
+    - **Payback 1.3개월**: 모델 투자 비용을 1.3개월 내 회수
+    - **연간 절감 460M KRW**: 잘못된 대출 결정 방지로 연간 4.6억원 절감
+    """)
 
 
 def display_recommendations(features_df: pd.DataFrame, financial_data: dict):
-    """섹션 3: 개선 권장사항"""
+    """섹션 4: 개선 권장사항"""
     st.markdown("---")
     st.markdown("## 💡 실행 가능한 개선 권장사항")
 
@@ -384,7 +451,7 @@ def display_recommendations(features_df: pd.DataFrame, financial_data: dict):
 
 
 def display_detailed_features(features_df: pd.DataFrame):
-    """섹션 4: 상세 특성"""
+    """섹션 5: 상세 특성"""
     st.markdown("---")
     with st.expander("📋 생성된 특성 상세 보기"):
         st.markdown(f"총 {len(features_df.columns)}개 특성이 생성되었습니다.")
@@ -406,7 +473,7 @@ def display_detailed_features(features_df: pd.DataFrame):
 
 
 def display_financial_statements(financial_data: dict):
-    """섹션 5: 재무제표 원본"""
+    """섹션 6: 재무제표 원본"""
     st.markdown("---")
     with st.expander("📋 재무제표 원본 데이터 보기"):
         # 재무상태표

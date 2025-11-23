@@ -95,6 +95,28 @@ class BankruptcyPredictor:
                 bankruptcy_prob = 0.8 if prediction == 1 else 0.2
                 confidence = 0.7
 
+            # SHAP 값 계산
+            shap_values = None
+            shap_base_value = None
+            try:
+                import shap
+                explainer = shap.TreeExplainer(self.model)
+                shap_values_result = explainer.shap_values(X_scaled)
+
+                # CatBoost는 리스트 반환 → 부도(1) 클래스만 사용
+                if isinstance(shap_values_result, list):
+                    shap_values = shap_values_result[1][0]
+                    shap_base_value = explainer.expected_value[1] if isinstance(explainer.expected_value, (list, np.ndarray)) else explainer.expected_value
+                else:
+                    shap_values = shap_values_result[0]
+                    shap_base_value = float(explainer.expected_value)
+
+                logger.info("✓ SHAP 값 계산 완료")
+            except Exception as e:
+                logger.warning(f"SHAP 계산 실패: {e}")
+                shap_values = None
+                shap_base_value = None
+
             # 결과 생성
             from src.utils.helpers import get_risk_level
             risk_level, icon, msg = get_risk_level(bankruptcy_prob)
@@ -111,6 +133,12 @@ class BankruptcyPredictor:
                     'n_features': X.shape[1]
                 }
             }
+
+            # SHAP 정보 추가
+            if shap_values is not None:
+                result['shap_values'] = shap_values.tolist() if hasattr(shap_values, 'tolist') else shap_values
+                result['shap_base_value'] = float(shap_base_value)
+                result['feature_names'] = list(X.columns)
 
             logger.info(f"예측 완료: 부도 확률 {bankruptcy_prob:.1%}, 등급 {risk_level}")
 

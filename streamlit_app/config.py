@@ -20,7 +20,8 @@ DATA_DIR = BASE_DIR / 'data'
 MODEL_DIR = DATA_DIR / 'processed'
 
 # 모델 파일 경로
-MODEL_PATH = MODEL_DIR / 'best_model_XGBoost.pkl'
+MODEL_PATH = MODEL_DIR / '발표_Part3_v3_최종모델.pkl'
+THRESHOLDS_PATH = MODEL_DIR / '발표_Part3_v3_임계값.pkl'
 SCALER_PATH = MODEL_DIR / 'scaler.pkl'
 FEATURES_PATH = MODEL_DIR / 'selected_features.csv'
 
@@ -35,11 +36,11 @@ PAGE_CONFIG = {
 }
 
 # === 임계값 설정 ===
-RISK_THRESHOLDS = {
-    'safe': 0.1,      # < 10%: 안전
-    'caution': 0.3,   # < 30%: 주의
-    'warning': 0.6,   # < 60%: 경고
-                      # >= 60%: 위험
+# Part 3 노트북의 최적 임계값 (Recall 80% 기준)
+TRAFFIC_LIGHT_THRESHOLDS = {
+    'green': 0.0168,   # < 1.68%: Safe
+    'yellow': 0.0468,  # < 4.68%: Potential Risk
+    'red': 1.0         # >= 4.68%: High Risk
 }
 
 # === 한글 폰트 설정 ===
