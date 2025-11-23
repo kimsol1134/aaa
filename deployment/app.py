@@ -17,6 +17,14 @@ from config import *
 from src.dart_api import DartAPIClient, FinancialStatementParser
 from src.domain_features import DomainFeatureGenerator
 from src.models import BankruptcyPredictor
+
+# Pickle 모델 로딩을 위해 transformer 클래스들 import (필수!)
+# 모델이 __main__ 네임스페이스에서 저장되었을 경우 필요
+try:
+    from src.preprocessing.transformers import InfiniteHandler, LogTransformer, Winsorizer
+except ImportError:
+    pass  # 모듈이 없으면 무시 (휴리스틱 모드로 작동)
+
 from src.visualization.charts import create_risk_gauge, create_shap_waterfall, create_shap_waterfall_real, create_radar_chart
 from src.utils.helpers import (
     get_risk_level, format_korean_number,
