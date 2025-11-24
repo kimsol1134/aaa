@@ -10,8 +10,9 @@ import sys
 from pathlib import Path
 
 # 프로젝트 루트를 경로에 추가
-ROOT_DIR = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT_DIR))
+# 프로젝트 루트를 경로에 추가 (Streamlit Cloud 배포 시 deployment 폴더가 루트가 되므로 주석 처리)
+# ROOT_DIR = Path(__file__).parent.parent
+# sys.path.insert(0, str(ROOT_DIR))
 
 from config import *
 from src.dart_api import DartAPIClient, FinancialStatementParser
