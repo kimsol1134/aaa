@@ -50,6 +50,8 @@ def create_stakeholder_features(
     """
     features = {}
 
+    # DART API에서 제공하지 않는 정보는 안전한 기본값 사용
+    # (신용평가사 데이터, 나이스평가 등 외부 데이터 필요)
     if company_info is None:
         company_info = {}
 
@@ -102,15 +104,34 @@ def create_stakeholder_features(
     )
     features['부실징후종합점수'] = min(1.0, 부실점수)
 
-    # 9. 이해관계자불신지수 (복합 지표)
+    # 4. 이해관계자불신지수 (복합 지표)
     # = 연체 + 체납 + 낮은 신용등급 + 배당 안 함
+    # 여기서는 단순화하여 연체여부, 세금체납여부, 법적리스크(없으면 0) 사용
     불신지수 = (
-        features['연체여부'] * 0.3 +
-        features['세금체납여부'] * 0.3 +
-        (10 - features['신용등급점수']) / 10 * 0.3 +
-        (1 - features['배당여부']) * 0.1
+        0.4 * features['연체여부'] +
+        0.3 * features['세금체납여부'] +
+        0.3 * features.get('법적리스크', 0.0)
     )
     features['이해관계자불신지수'] = min(1.0, 불신지수)
+
+    # 5. 연체심각도 = 총연체건수 * (부채비율/100)
+    # 총연체건수가 features에 없으므로 company_info에서 가져오거나 계산
+    features['총연체건수'] = company_info.get('총연체건수', 0)
+    
+    # 부채비율은 여기서 계산 불가하므로, 외부에서 주입받거나 여기서 근사 계산
+    # financial_data에 부채총계, 자본총계가 있으므로 계산 가능
+    부채총계 = financial_data.get('부채총계', 0)
+    자본총계 = financial_data.get('자본총계', 0)
+    부채비율 = (부채총계 / (자본총계 + 1)) * 100
+    features['연체심각도'] = features['총연체건수'] * (부채비율 / 100)
+
+    # 6. 공공정보리스크 (세금체납 등 공공 정보 기반 리스크)
+    # 여기서는 세금체납여부만 있으므로 이를 기반으로 생성
+    features['공공정보리스크'] = features['세금체납여부'] * 3  # 가중치 3
+
+    # 7. 이해관계자_불신지수 (Part3에서 제거됨 - 논리적 오류)
+    # Part3 노트북에서 '이해관계자불신지수'와 중복으로 제거
+    # features['이해관계자_불신지수'] = (features['연체심각도'] + features['공공정보리스크']) / 2
 
     # 무한대/NaN 처리
     for key in features:

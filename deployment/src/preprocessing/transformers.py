@@ -61,8 +61,14 @@ class LogTransformer(BaseEstimator, TransformerMixin):
         """로그 변환 (log1p 사용)"""
         if isinstance(X, pd.DataFrame):
             X = X.copy()
-            if self.columns_to_transform_:
-                for col in self.columns_to_transform_:
+            
+            # Backward compatibility for pickled models
+            cols = getattr(self, 'columns_to_transform_', None)
+            if cols is None:
+                cols = getattr(self, 'positive_cols_', None)
+                
+            if cols:
+                for col in cols:
                     if col in X.columns:
                         X[col] = np.log1p(X[col])
         else:

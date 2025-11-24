@@ -81,7 +81,9 @@ def create_liquidity_features(financial_data: Dict) -> Dict:
 
     # 5. 운전자본비율 = (유동자산 - 유동부채) / 자산총계
     운전자본 = 유동자산 - 유동부채
+    features['운전자본'] = 운전자본
     features['운전자본비율'] = 운전자본 / (자산총계 + 1)
+    features['운전자본_대_자산'] = features['운전자본비율'] # Alias
 
     # 6. 긴급유동성비율 = (현금 + 단기금융상품) / 유동부채
     features['긴급유동성비율'] = (현금 + 단기금융상품) / (유동부채 + 1)

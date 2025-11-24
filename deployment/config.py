@@ -19,9 +19,12 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / 'data'
 MODEL_DIR = DATA_DIR / 'processed'
 
-# 모델 파일 경로 (Optional - 없어도 휴리스틱으로 작동)
-# Part3 파이프라인 모델 (우선 사용)
+# === 모델 경로 ===
+# Part3 v3 최종 모델 (CatBoost Pipeline - 노트북과 동일)
 PIPELINE_PATH = MODEL_DIR / '발표_Part3_v3_최종모델.pkl'
+
+# 레거시 모델 경로 (VotingClassifier - 사용 안 함)
+# PIPELINE_PATH = MODEL_DIR / 'final_model.pkl'
 
 # 레거시 모델 (파이프라인 없을 경우)
 MODEL_PATH = MODEL_DIR / 'best_model.pkl'

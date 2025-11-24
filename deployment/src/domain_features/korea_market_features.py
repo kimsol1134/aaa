@@ -51,6 +51,8 @@ def create_korea_market_features(
     """
     features = {}
 
+    # DART API에서 일부 제공 (업종코드), 나머지는 기본값 사용
+    # DART company.json API로 업종코드, 설립일 등 추가 가능
     if company_info is None:
         company_info = {}
 
@@ -87,7 +89,7 @@ def create_korea_market_features(
     features['신생기업여부'] = 1.0 if 업력 < 3 else 0.0
 
     # 6. 종업원수 (로그 스케일)
-    종업원수 = company_info.get('종업원수', 100)
+    종업원수 = company_info.get('종업원수', 10000)  # 상장사 기본값
     features['종업원수_로그'] = np.log1p(종업원수)
 
     # 7. 인당매출액 = 매출액 / 종업원수
@@ -120,6 +122,20 @@ def create_korea_market_features(
     features['한국시장리스크지수'] = (
         제조업리스크 + 신생기업리스크 + 외감리스크
     )
+
+    # 10. 매출집중도 (자산 대비 매출 비중)
+    # 매출액 / 자산총계
+    features['매출집중도'] = 매출액 / (자산총계 + 1)
+
+    # 11. 매출집중리스크 (매출집중도가 너무 높거나 낮으면 리스크)
+    # 0.5 ~ 1.5 사이가 적정하다고 가정
+    매출집중도 = features['매출집중도']
+    if 매출집중도 < 0.5:
+        features['매출집중리스크'] = 1
+    elif 매출집중도 > 1.5:
+        features['매출집중리스크'] = 2
+    else:
+        features['매출집중리스크'] = 0
 
     # 무한대/NaN 처리
     for key in features:

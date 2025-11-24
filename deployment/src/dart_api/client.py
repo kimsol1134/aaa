@@ -342,3 +342,108 @@ class DartAPIClient:
                 results[year] = None
 
         return results
+
+    def get_company_info(self, corp_code: str) -> Dict:
+        """
+        기업 개황 정보 조회 (company.json API)
+
+        업종코드, 설립일, 종업원수 등 기본 정보 조회
+
+        Args:
+            corp_code: 고유번호 (8자리)
+
+        Returns:
+            {
+                '업종': '반도체',
+                '업종코드': 'C26',  # KSIC 코드
+                '설립일': '1969-01-13',
+                '업력': 55,  # 설립 후 경과 년수
+                '종업원수': 120000,
+                '외감여부': True,  # 상장사는 True
+                ...
+            }
+
+        Note:
+            - DART API의 company.json 엔드포인트 사용
+            - 상장사만 정확한 정보 제공
+            - 비상장사는 일부 정보 누락 가능
+        """
+        endpoint = "company.json"
+        params = {'corp_code': corp_code}
+
+        try:
+            data = self._make_request(endpoint, params)
+
+            # 기본 정보 추출
+            company_info = {}
+
+            # 업종코드 (DART API 필드명: induty_code)
+            # KSIC 표준산업분류 코드 (예: C26 = 전자부품,컴퓨터,영상,음향및통신장비 제조업)
+            if 'induty_code' in data and data['induty_code']:
+                company_info['업종코드'] = data['induty_code']
+                logger.info(f"  업종코드: {data['induty_code']}")
+            else:
+                company_info['업종코드'] = ''
+                logger.warning("  업종코드 없음")
+
+            # 설립일 및 업력 계산 (DART API 필드명: est_dt, 형식: YYYYMMDD)
+            if 'est_dt' in data and data['est_dt']:
+                est_date = data['est_dt']
+                try:
+                    est_year = int(est_date[:4]) if len(est_date) >= 4 else 1990
+                    current_year = datetime.now().year
+                    company_info['설립일'] = est_date
+                    company_info['업력'] = current_year - est_year
+                    logger.info(f"  설립일: {est_date} → 업력 {company_info['업력']}년")
+                except (ValueError, TypeError):
+                    company_info['설립일'] = None
+                    company_info['업력'] = 10  # 기본값
+                    logger.warning("  설립일 파싱 실패, 기본값 10년 사용")
+            else:
+                company_info['설립일'] = None
+                company_info['업력'] = 10  # 기본값
+                logger.warning("  설립일 없음, 기본값 10년 사용")
+
+            # 종업원수 (DART company.json에는 없음, 별도 API 필요)
+            # 기본값 사용 (대기업은 일반적으로 10,000명 이상)
+            company_info['종업원수'] = 10000  # 상장사 기본값 (조정 가능)
+
+            # 외감여부 (상장사는 True)
+            # stock_code가 있으면 상장사로 간주
+            stock_code = self._get_stock_code_from_corp_code(corp_code)
+            company_info['외감여부'] = bool(stock_code)
+
+            # 추가 정보
+            company_info['corp_code'] = corp_code
+            company_info['corp_name'] = data.get('corp_name', '')
+            company_info['ceo_nm'] = data.get('ceo_nm', '')
+            company_info['jurir_no'] = data.get('jurir_no', '')  # 법인등록번호
+            company_info['stock_code'] = stock_code
+
+            logger.info(f"✓ 기업 정보 조회 성공: {company_info.get('corp_name', '')}")
+            logger.info(f"  업종코드: {company_info.get('업종코드') or 'N/A'}")
+            logger.info(f"  업력: {company_info.get('업력')}년")
+            logger.info(f"  종업원수: {company_info.get('종업원수'):,}명 (기본값)")
+            logger.info(f"  외감여부: {company_info.get('외감여부')}")
+
+            return company_info
+
+        except Exception as e:
+            logger.warning(f"기업 정보 조회 실패: {str(e)}")
+            logger.warning("기본값으로 대체합니다.")
+
+            # 실패 시 기본값 반환
+            return {
+                'corp_code': corp_code,
+                '업종코드': '',
+                '업력': 10,
+                '종업원수': 10000,  # 상장사 기본값
+                '외감여부': True,
+            }
+
+    def _get_stock_code_from_corp_code(self, corp_code: str) -> Optional[str]:
+        """corp_code로부터 stock_code 조회 (캐시에서)"""
+        for corp_info in self.corp_codes.values():
+            if corp_info.get('corp_code') == corp_code:
+                return corp_info.get('stock_code')
+        return None

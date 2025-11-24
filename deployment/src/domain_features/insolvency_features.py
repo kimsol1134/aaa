@@ -96,6 +96,14 @@ def create_insolvency_features(financial_data: Dict) -> Dict:
         0.4 * 이자보상배율_정규화
     )
 
+    # 9. 순부채비율 = (부채총계 - 현금) / 자본총계 * 100
+    # 순차입금의존도와 유사하지만 부채 전체 기준
+    features['순부채비율'] = ((부채총계 - 현금) / (자본총계 + 1)) * 100
+
+    # 10. 이자부담률 = 이자비용 / 매출액 * 100
+    매출액 = financial_data.get('매출액', 0)
+    features['이자부담률'] = (이자비용 / (매출액 + 1)) * 100
+
     # 무한대/NaN 처리
     for key in features:
         if not np.isfinite(features[key]):

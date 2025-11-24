@@ -150,10 +150,20 @@ def main():
                 parser = FinancialStatementParser()
                 financial_data = parser.parse(statements)
 
+                # 기업 정보 조회 (업종코드, 업력, 종업원수 등)
+                client = DartAPIClient(DART_API_KEY)
+                dart_company_info = client.get_company_info(company['corp_code'])
+
+                # company_info 통합
                 company_info = {
                     'corp_name': company['corp_name'],
                     'stock_code': company['stock_code'],
-                    'year': year
+                    'year': year,
+                    # DART company.json에서 가져온 정보
+                    '업종코드': dart_company_info.get('업종코드', ''),
+                    '업력': dart_company_info.get('업력', 10),
+                    '종업원수': dart_company_info.get('종업원수', 100),
+                    '외감여부': dart_company_info.get('외감여부', True),
                 }
 
                 # 분석 실행
@@ -264,7 +274,7 @@ def run_analysis(financial_data: dict, company_info: dict):
     # 1. 특성 생성
     with st.spinner("도메인 특성 생성 중..."):
         generator = DomainFeatureGenerator()
-        features_df = generator.generate_all_features(financial_data)
+        features_df = generator.generate_all_features(financial_data, company_info)
 
     st.success(f"✓ {len(features_df.columns)}개 특성 생성 완료")
 
@@ -479,7 +489,7 @@ def display_detailed_features(features_df: pd.DataFrame):
                 st.markdown(f"**{cat_name} 특성 ({len(cols)}개)**")
                 cat_df = features_df[cols].T
                 cat_df.columns = ['값']
-                st.dataframe(cat_df, use_container_width=True)
+                st.dataframe(cat_df, width='stretch')
 
 
 def display_financial_statements(financial_data: dict):
@@ -500,7 +510,7 @@ def display_financial_statements(financial_data: dict):
                 financial_data.get('자본총계', 0)
             ]
         }
-        st.dataframe(pd.DataFrame(bs_data), use_container_width=True)
+        st.dataframe(pd.DataFrame(bs_data), width='stretch')
 
         # 손익계산서
         st.markdown("### 손익계산서")
@@ -514,7 +524,7 @@ def display_financial_statements(financial_data: dict):
                 financial_data.get('당기순이익', 0)
             ]
         }
-        st.dataframe(pd.DataFrame(is_data), use_container_width=True)
+        st.dataframe(pd.DataFrame(is_data), width='stretch')
 
 
 def create_sample_data(sample_type: str) -> dict:

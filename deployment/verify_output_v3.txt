@@ -1,0 +1,70 @@
+INFO:src.domain_features.feature_generator:유동성 위기 특성 생성 중...
+INFO:src.domain_features.feature_generator:  → 12개 특성 생성
+INFO:src.domain_features.feature_generator:지급불능 특성 생성 중...
+INFO:src.domain_features.feature_generator:  → 10개 특성 생성
+INFO:src.domain_features.feature_generator:재무조작 탐지 특성 생성 중...
+INFO:src.domain_features.feature_generator:  → 20개 특성 생성
+INFO:src.domain_features.feature_generator:한국 시장 특화 특성 생성 중...
+INFO:src.domain_features.feature_generator:  → 15개 특성 생성
+INFO:src.domain_features.feature_generator:이해관계자 행동 특성 생성 중...
+INFO:src.domain_features.feature_generator:  → 13개 특성 생성
+INFO:src.domain_features.feature_generator:복합 리스크 특성 생성 중...
+INFO:src.domain_features.feature_generator:  → 10개 특성 생성
+INFO:src.domain_features.feature_generator:특성 검증 및 정제 중...
+INFO:src.domain_features.feature_generator:  정제 전: (1, 80), 정제 후: (1, 80)
+INFO:src.domain_features.feature_generator:  무한대/NaN 제거 완료
+INFO:src.domain_features.feature_generator:✓ 총 80개 특성 생성 완료
+INFO:src.models.predictor:📦 전체 파이프라인 로딩 중: /Users/solkim/Dev/junwoo/deployment/data/processed/final_model.pkl
+INFO:src.models.predictor:✓ Part3 파이프라인 로드 성공!
+INFO:src.models.predictor:   모델 타입: VotingClassifier (estimators: 3)
+INFO:src.models.predictor:Part3 파이프라인으로 예측 중...
+INFO:src.models.predictor:X_for_shap shape: (1, 27)
+INFO:src.models.predictor:X_for_shap dtypes: 순부채비율         float64
+운전자본          float64
+이해관계자_불신지수    float64
+운전자본비율        float64
+이자부담률         float64
+공공정보리스크       float64
+판관비효율성        float64
+재고회전율         float64
+유동성압박지수       float64
+매출총이익률        float64
+OCF_대_유동부채    float64
+부채레버리지        float64
+재고보유일수        float64
+현금소진일수        float64
+매출집중도         float64
+연체심각도         float64
+신용등급점수          int64
+부채상환년수        float64
+매출채권_이상지표     float64
+매출채권회전율       float64
+총발생액          float64
+현금흐름품질        float64
+긴급유동성         float64
+즉각지급능력        float64
+운전자본_대_자산     float64
+이자보상배율        float64
+현금창출능력        float64
+dtype: object
+INFO:src.models.predictor:Creating TreeExplainer for <class 'xgboost.sklearn.XGBClassifier'>
+WARNING:src.models.predictor:TreeExplainer init failed: could not convert string to float: '[1.5143199E-2]'. Attempting to fix model parameters...
+INFO:src.models.predictor:Found problematic base_score: [1.5143199E-2]
+INFO:src.models.predictor:Modifying config JSON base_score to 0.015143199
+INFO:src.models.predictor:Reloading booster config...
+INFO:src.models.predictor:Creating TreeExplainer with fixed booster...
+ERROR:src.models.predictor:Model fix failed: could not convert string to float: '[1.5143199E-2]'
+WARNING:src.models.predictor:SHAP 계산 실패: could not convert string to float: '[1.5143199E-2]'
+INFO:src.models.predictor:예측 완료: 부도 확률 19.6%, 등급 고위험
+PREDICTOR MODULE FILE: /Users/solkim/Dev/junwoo/deployment/src/models/predictor.py
+Testing full flow with real Samsung data...
+Generating features...
+Generated 80 features.
+
+Loading model and predicting...
+
+Prediction Result:
+dict_keys(['bankruptcy_probability', 'risk_level', 'risk_icon', 'risk_message', 'confidence', 'features_used', 'model_info'])
+✗ SHAP values MISSING
+
+SUCCESS: Prediction used the ML model.

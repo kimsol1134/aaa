@@ -88,9 +88,15 @@ class BankruptcyPredictor:
                 logger.info(f"📦 전체 파이프라인 로딩 중: {self.pipeline_path}")
                 self.pipeline = joblib.load(self.pipeline_path)
                 logger.info("✓ Part3 파이프라인 로드 성공!")
-                logger.info(f"   파이프라인 단계: {len(self.pipeline.steps)}개")
-                for step_name, _ in self.pipeline.steps:
-                    logger.info(f"   - {step_name}")
+                
+                if hasattr(self.pipeline, 'steps'):
+                    logger.info(f"   파이프라인 단계: {len(self.pipeline.steps)}개")
+                    for step_name, _ in self.pipeline.steps:
+                        logger.info(f"   - {step_name}")
+                elif hasattr(self.pipeline, 'estimators_'):
+                    logger.info(f"   모델 타입: VotingClassifier (estimators: {len(self.pipeline.estimators_)})")
+                else:
+                    logger.info(f"   모델 타입: {type(self.pipeline).__name__}")
                 return
 
             # 2. 모델 단독 로드
@@ -160,7 +166,29 @@ class BankruptcyPredictor:
                     confidence = 0.7
 
                 # 파이프라인 내부 모델 추출 (SHAP용)
-                model_for_shap = self.pipeline.named_steps.get('classifier', None)
+                # Part4 노트북 방식: Pipeline의 마지막 단계 (CatBoost) 추출
+                if hasattr(self.pipeline, 'steps'):
+                    # Pipeline의 마지막 단계가 classifier (CatBoost)
+                    model_for_shap = self.pipeline.steps[-1][1]
+                    logger.info(f"   - Pipeline에서 최종 모델 추출: {type(model_for_shap).__name__}")
+
+                    # VotingClassifier인 경우 SHAP 계산 스킵
+                    if hasattr(model_for_shap, 'estimators_'):
+                        logger.warning("VotingClassifier는 SHAP TreeExplainer 미지원 - SHAP 계산 생략")
+                        model_for_shap = None
+
+                elif hasattr(self.pipeline, 'named_steps'):
+                    model_for_shap = self.pipeline.named_steps.get('classifier', self.pipeline)
+                    if hasattr(model_for_shap, 'estimators_'):
+                        logger.warning("VotingClassifier는 SHAP TreeExplainer 미지원 - SHAP 계산 생략")
+                        model_for_shap = None
+                else:
+                    model_for_shap = self.pipeline
+                    if hasattr(model_for_shap, 'estimators_'):
+                        logger.warning("VotingClassifier는 SHAP TreeExplainer 미지원 - SHAP 계산 생략")
+                        model_for_shap = None
+
+                # SHAP 계산용 데이터는 전처리된 데이터 (Pipeline 입력과 동일)
                 X_for_shap = X
 
             # 2. 전처리 파이프라인 + 모델 분리 사용
@@ -215,18 +243,57 @@ class BankruptcyPredictor:
             shap_base_value = None
             try:
                 import shap
-                if model_for_shap is not None:
-                    explainer = shap.TreeExplainer(model_for_shap)
-                    shap_values_result = explainer.shap_values(X_for_shap)
-                else:
-                    raise ValueError("SHAP을 위한 모델을 찾을 수 없습니다.")
-
                 # CatBoost는 리스트 반환 → 부도(1) 클래스만 사용
-                if isinstance(shap_values_result, list):
-                    shap_values = shap_values_result[1][0]
-                    shap_base_value = explainer.expected_value[1] if isinstance(explainer.expected_value, (list, np.ndarray)) else explainer.expected_value
+                logger.info(f"X_for_shap shape: {X_for_shap.shape}")
+                logger.info(f"X_for_shap dtypes: {X_for_shap.dtypes}")
+                
+                if model_for_shap is not None:
+                    logger.info(f"Creating TreeExplainer for {type(model_for_shap)}")
+                    try:
+                        explainer = shap.TreeExplainer(model_for_shap)
+                        logger.info("Calculating shap_values...")
+                        shap_values_result = explainer.shap_values(X_for_shap)
+                        logger.info("shap_values calculated.")
+                    except Exception as e:
+                        logger.warning(f"TreeExplainer 초기화 실패: {e}. SHAP 계산을 건너뜁니다.")
+                        raise ValueError(f"SHAP 초기화 실패: {e}")
                 else:
-                    shap_values = shap_values_result[0]
+                    logger.info("SHAP 계산 생략 (VotingClassifier는 미지원)")
+                    raise ValueError("VotingClassifier는 SHAP TreeExplainer 미지원")
+
+                logger.info(f"SHAP result type: {type(shap_values_result)}")
+                logger.info(f"Expected value type: {type(explainer.expected_value)}")
+                logger.info(f"Expected value: {explainer.expected_value}")
+
+                # Part4 노트북 방식: CatBoost는 리스트 반환 → [클래스0, 클래스1]
+                if isinstance(shap_values_result, list):
+                    # CatBoost: shap_values_result = [array(...), array(...)]
+                    # shap_values_result[1] = 부도(클래스 1)에 대한 SHAP 값
+                    # shap_values_result[1][0] = 첫 번째 샘플 (shape: (27,))
+                    try:
+                        shap_values = shap_values_result[1][0]  # numpy 배열 (27개 특성)
+                        logger.info(f"CatBoost SHAP values (클래스 1): shape {shap_values.shape}")
+                    except IndexError:
+                        shap_values = shap_values_result[0][0]
+                        logger.warning("클래스 1 없음, 클래스 0 사용")
+
+                    # expected_value도 리스트: [클래스0 기준값, 클래스1 기준값]
+                    if isinstance(explainer.expected_value, (list, np.ndarray)) and len(explainer.expected_value) > 1:
+                        shap_base_value = float(explainer.expected_value[1])  # 클래스 1 기준값
+                    else:
+                        shap_base_value = float(explainer.expected_value)
+
+                    logger.info(f"SHAP base value (클래스 1): {shap_base_value:.4f}")
+
+                else:
+                    # 단일 배열인 경우 (이진 분류 단일 출력)
+                    if len(shap_values_result.shape) > 1:
+                         # (samples, features) - 첫 번째 샘플 선택
+                         shap_values = shap_values_result[0]
+                    else:
+                         # (features,) - 그대로 사용
+                         shap_values = shap_values_result
+
                     shap_base_value = float(explainer.expected_value)
 
                 logger.info("✓ SHAP 값 계산 완료")
@@ -285,13 +352,64 @@ class BankruptcyPredictor:
         Returns:
             모델 입력용 DataFrame
         """
-        # 모델이 기대하는 특성 목록 로드 (선택된 특성)
-        # 실제로는 학습 시 사용한 특성 목록을 저장해두고 로드해야 함
-        # 여기서는 모든 특성 사용
+        # 모델이 기대하는 특성 목록 (26개)
+        # Part3 노트북에서 '이해관계자_불신지수' 제거됨 (논리적 오류 방지)
+        expected_features = [
+            '순부채비율', '운전자본', '운전자본비율', '이자부담률',
+            '공공정보리스크', '판관비효율성', '재고회전율', '유동성압박지수', '매출총이익률',
+            'OCF_대_유동부채', '부채레버리지', '재고보유일수', '현금소진일수', '매출집중도',
+            '연체심각도', '신용등급점수', '부채상환년수', '매출채권_이상지표', '매출채권회전율',
+            '총발생액', '현금흐름품질', '긴급유동성', '즉각지급능력', '운전자본_대_자산',
+            '이자보상배율', '현금창출능력'
+        ]
 
         X = features_df.copy()
+        
+        # 1. 특성 이름 매핑 (생성된 특성 -> 모델 기대 특성)
+        # 도메인 특성 생성 시 이름과 모델 학습 시 사용한 이름의 차이를 보정
+        rename_map = {
+            'OCF유동부채비율': 'OCF_대_유동부채',
+            '긴급유동성비율': '긴급유동성',
+            '유동성위기지수': '유동성압박지수',
+            '재무레버리지': '부채레버리지',
+            '재고자산회전일수': '재고보유일수',
+            '현금흐름적정성': '현금흐름품질',
+            '당좌비율': '즉각지급능력',
+            '단기지급능력': '현금창출능력',
+        }
+        X = X.rename(columns=rename_map)
+        
+        # 중복된 컬럼 제거 (매핑으로 인해 중복 발생 시 첫 번째 것 유지)
+        X = X.loc[:, ~X.columns.duplicated()]
 
-        # 범주형 변수 제거 (숫자형만)
+        # 2. 누락된 특성 채우기 (기본값 사용)
+        # DART API에서 얻을 수 없는 신용평가 정보는 안전한 기본값 사용
+        # 보수적 가정: 평균적이고 문제없는 기업으로 가정하여 부도 위험을 과소평가하지 않도록 함
+        defaults = {
+            # 신용평가 정보 (DART API 미제공, 외부 신용평가사 데이터 필요)
+            '신용등급점수': 5.0,        # BBB 등급 (중간 등급, 1~10 스케일에서 5)
+            '연체심각도': 0.0,          # 연체 없음 가정 (0 = 연체 없음, 1 = 심각)
+            '공공정보리스크': 0.0,      # 세금체납 없음 가정 (0 = 없음, 1 = 있음)
+        }
+        
+        for feature in expected_features:
+            if feature not in X.columns:
+                if feature in defaults:
+                    val = defaults[feature]
+                    # Series일 경우 값만 추출
+                    if isinstance(val, pd.Series):
+                        val = val.iloc[0]
+                    X[feature] = val
+                    logger.warning(f"특성 '{feature}' 누락됨. 기본값 {val} 사용")
+                else:
+                    # 매핑되지 않은 나머지 특성은 0으로 채움
+                    X[feature] = 0.0
+                    logger.warning(f"특성 '{feature}' 누락됨. 0.0으로 채움")
+
+        # 3. 순서 맞추기 및 선택
+        X = X[expected_features]
+
+        # 범주형 변수 제거 (숫자형만) - 이미 위에서 선택했으므로 불필요할 수 있으나 안전장치
         X = X.select_dtypes(include=[np.number])
 
         # NaN/Inf 제거
@@ -353,3 +471,43 @@ class BankruptcyPredictor:
         logger.info(f"휴리스틱 예측 완료: 부도 확률 {bankruptcy_prob:.1%}")
 
         return result
+        return result
+
+    def _parse_shap_value(self, value) -> float:
+        """
+        SHAP 값 파싱 (float, string, list string 등 처리)
+        """
+        if value is None:
+            return 0.0
+            
+        if isinstance(value, (float, int, np.number)):
+            return float(value)
+            
+        if isinstance(value, (list, np.ndarray)):
+            # 리스트나 배열인 경우 첫 번째 요소 재귀 처리
+            if len(value) > 0:
+                return self._parse_shap_value(value[0])
+            return 0.0
+            
+        if isinstance(value, (str, np.str_)):
+            import ast
+            try:
+                # 1. 단순 float 변환
+                return float(value)
+            except:
+                try:
+                    # 2. 리스트 형태 문자열 파싱 ('[0.123]')
+                    parsed = ast.literal_eval(value)
+                    if isinstance(parsed, list):
+                        return self._parse_shap_value(parsed[0])
+                    return float(parsed)
+                except:
+                    try:
+                        # 3. 괄호 제거 후 변환
+                        clean_val = value.replace('[', '').replace(']', '').strip()
+                        return float(clean_val)
+                    except:
+                        logger.warning(f"SHAP 값 파싱 실패: {value}")
+                        return 0.0
+        
+        return 0.0

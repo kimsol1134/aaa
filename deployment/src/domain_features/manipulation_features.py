@@ -129,6 +129,25 @@ def create_manipulation_features(financial_data: Dict) -> Dict:
         0.4 * 이익의질_정규화
     )
 
+    # 16. 재고회전율 = 매출원가 / 재고자산
+    features['재고회전율'] = 매출원가 / (재고자산 + 1)
+
+    # 17. 매출채권회전율 = 매출액 / 매출채권
+    features['매출채권회전율'] = 매출액 / (매출채권 + 1)
+
+    # 18. 총발생액 = 당기순이익 - 영업활동현금흐름
+    features['총발생액'] = 당기순이익 - 영업활동현금흐름
+
+    # 19. 판관비효율성 = 판매비와관리비 / 매출액 (판매비와관리비비율과 동일하지만 명시적 추가)
+    features['판관비효율성'] = 판매비와관리비 / (매출액 + 1)
+
+    # 20. 매출채권_이상지표 = 매출채권비율 * (부채비율/100)
+    # 부채비율 계산
+    부채총계 = financial_data.get('부채총계', 0)
+    자본총계 = financial_data.get('자본총계', 0)
+    부채비율 = (부채총계 / (자본총계 + 1)) * 100
+    features['매출채권_이상지표'] = features['매출채권비율'] * (부채비율 / 100)
+
     # 무한대/NaN 처리
     for key in features:
         if not np.isfinite(features[key]):
